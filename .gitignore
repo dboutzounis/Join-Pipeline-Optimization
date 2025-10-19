@@ -8,3 +8,5 @@
 /job-sample
 /.cache
 /cache
+/sigmod25_cache_x86.tar.gz
+/sigmod25_cache_arm.tar.gz
