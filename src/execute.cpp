@@ -1,6 +1,7 @@
 #include <hardware.h>
 #include <plan.h>
 #include <table.h>
+#include <hash_algo.h>
 
 namespace Contest {
 
@@ -19,17 +20,17 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
         namespace views = ranges::views;
-        std::unordered_map<T, std::vector<size_t>> hash_table;
+        Base_Solution<T ,std::vector<size_t>> hash_table;
         if (build_left) {
             for (auto&& [idx, record]: left | views::enumerate) {
                 std::visit(
                     [&hash_table, idx = idx](const auto& key) {
                         using Tk = std::decay_t<decltype(key)>;
                         if constexpr (std::is_same_v<Tk, T>) {
-                            if (auto itr = hash_table.find(key); itr == hash_table.end()) {
+                            if(auto itr = hash_table.find(key); itr == hash_table.end()) {
                                 hash_table.emplace(key, std::vector<size_t>(1, idx));
                             } else {
-                                itr->second.push_back(idx);
+                                itr.push_back(idx);
                             }
                         } else if constexpr (not std::is_same_v<Tk, std::monostate>) {
                             throw std::runtime_error("wrong type of field");
