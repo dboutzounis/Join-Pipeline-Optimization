@@ -20,7 +20,7 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
         namespace views = ranges::views;
-        Base_Solution<T, std::vector<size_t>> hash_table;
+        Hopscotch<T, std::vector<size_t>> hash_table(8);
         if (build_left) {
             for (auto&& [idx, record] : left | views::enumerate) {
                 std::visit(
