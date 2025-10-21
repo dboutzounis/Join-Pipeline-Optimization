@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <iostream>
 #include <unordered_map>
 #include <vector>
@@ -59,12 +60,23 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
 
     size_t hash_with_seed(const Key& key, size_t seed, size_t i) const { return (std::hash<Key>{}(key) ^ (seed * 0x9e3779b97f4a7c15ULL)) % size[i]; }
 
+    void rehash(size_t index) {
+        std::vector<Bucket> old_hash_table = std::move(hash_table[index]);
+
+        size[index] *= 2;
+        hash_table[index].clear();
+        hash_table[index].assign(size[index], Bucket());
+
+        for (auto& bucket : old_hash_table)
+            if (bucket.occupied) emplace(bucket.key, std::move(bucket.value));
+    }
+
    public:
     Cuckoo(size_t dim = 2, size_t size = 1024) : dim(dim), size(new size_t[dim]), active(new size_t[dim]), hash_table(dim, std::vector<Bucket>(size)) {
         for (int i = 0; i < dim; i++) {
             this->size[i] = size;
             this->active[i] = 0;
-            hash_functions.push_back([this, i](const Key& key) { return hash_with_seed(key, i + 1, i); })
+            hash_functions.push_back([this, i](const Key& key) { return hash_with_seed(key, i + 1, i); });
         }
     }
 
@@ -72,7 +84,35 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
         delete[] size;
         delete[] active;
     }
-    void emplace(const Key& key, const T& value) override {}
+    void emplace(const Key& key, const T& value) override {
+        const Key* curkey = &key;
+        const T* curval = &value;
+        size_t table_idx = 0;
+        size_t swap_count = 0;
+        size_t max_swap = 0;
+        for (int i = 0; i < dim; i++) max_swap += size[i];
+        while (swap_count < max_swap) {
+            size_t index = hash_functions[table_idx](curkey);
+            if (static_cast<double>(active[index]) / size[index] > 0.5) rehash(index);
+
+            if (!hash_table[table_idx][index].occupied) {
+                hash_table[table_idx][index].key = curkey;
+                hash_table[table_idx][index].value = curval;
+                hash_table[table_idx][index].occupied = true;
+                active[index]++;
+                return;
+            }
+
+            std::swap(const_cast<Key&>(*curkey), hash_table[table_idx][index].key);
+            std::swap(const_cast<T&>(*curval), hash_table[table_idx][index].value);
+
+            table_idx = (table_idx + 1) % dim;
+            swap_count++;
+        }
+
+        rehash(0);
+        emplace(const_cast<Key&>(*curkey), const_cast<T&>(*curval));
+    }
 
     T& find(const Key& key) override {
         for (size_t i = 0; i < dim; i++) {
