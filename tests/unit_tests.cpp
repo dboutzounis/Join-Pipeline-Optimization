@@ -2,6 +2,7 @@
 
 #include <table.h>
 #include <plan.h>
+#include "hash_algo.h"
 
 void sort(std::vector<std::vector<Data>>& table) {
     std::sort(table.begin(), table.end());
@@ -368,4 +369,97 @@ TEST_CASE("3-way join", "[join]") {
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
+}
+
+TEST_CASE("Robin Hood basic insert", "[robin]")
+{
+    Robin_Hood<int, std::vector<int>> table(8);
+
+    auto& hash_table = table.get_table();
+     // Manually fill hash_table for testing
+    hash_table = {
+        {{1, {10, 20, 30}}, 0},
+        {{2, {40, 50}}, 1},
+        {{3, {99}}, 2},
+        {{}, -1},
+        {{}, -1},
+        {{}, -1},
+        {{}, -1},
+        {{}, -1}
+    };
+
+    SECTION("Find existing key returns correct vector") {
+        auto& result = table.find(2);
+        REQUIRE(result.size() == 2);
+        REQUIRE(result[0] == 40);
+        REQUIRE(result[1] == 50);
+    }
+
+    SECTION("Find missing key throws error") {
+        REQUIRE(table.find(4).size() == 0);
+    }
+    
+}
+
+TEST_CASE("Robin Hood emplace basic behavior", "[robin_emplace]") {
+   
+    SECTION("Insert single key-value pair") {
+        Robin_Hood<int, std::vector<size_t>> hash_table(3);
+        hash_table.emplace(1, {10, 20});
+        auto& result = hash_table.find(1);
+        REQUIRE(result.size() == 2);
+        REQUIRE(result[0] == 10);
+        REQUIRE(result[1] == 20);
+    }
+
+    SECTION("Insert multiple keys without collision") {
+        Robin_Hood<const char*, std::vector<size_t>> hash_table(3);
+        hash_table.emplace("iasonas", {22});
+        hash_table.print();
+        hash_table.emplace("kostis", {33});
+
+        hash_table.print();
+
+        hash_table.emplace("antreas", {10, 20});
+
+        hash_table.print();
+    }
+
+    // SECTION("Insert keys that cause collision and trigger probing") {
+    //     // These two will likely collide depending on hash
+    //     int k1 = 5;
+    //     int k2 = 13;  // same hash index mod 8 if hash_index uses % 8
+
+    //     hash_table.emplace(k1, {50});
+    //     hash_table.emplace(k2, {130});  // should probe and insert further
+
+    //     auto& v1 = hash_table.find(k1);
+    //     auto& v2 = hash_table.find(k2);
+
+    //     REQUIRE(v1[0] == 50);
+    //     REQUIRE(v2[0] == 130);
+
+    //     // Check that both exist somewhere in hash_table
+    //     auto& ht = hash_table.get_table();
+    //     bool found_k1 = false, found_k2 = false;
+    //     for (auto& entry : ht) {
+    //         if (entry.second == -1) continue;
+    //         if (entry.first.first == k1) found_k1 = true;
+    //         if (entry.first.first == k2) found_k2 = true;
+    //     }
+    //     REQUIRE(found_k1);
+    //     REQUIRE(found_k2);
+    // }
+}
+
+TEST_CASE("Robin Hood rehash basic growth", "[rehash]") {
+    // Start with capacity = 1 to force multiple rehashes
+    Robin_Hood<int, std::vector<int>> table(10);
+
+    // Insert 10 elements — each key has a single value
+    for (int i = 1; i < 100; i*=2) {
+        table.print();
+        table.emplace(i, std::vector<int>{i});
+    }
+
 }
