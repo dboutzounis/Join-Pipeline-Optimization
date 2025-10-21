@@ -66,6 +66,7 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
         size[index] *= 2;
         hash_table[index].clear();
         hash_table[index].assign(size[index], Bucket());
+        active[index] = 0;
 
         for (auto& bucket : old_hash_table)
             if (bucket.occupied) emplace(bucket.key, std::move(bucket.value));
@@ -92,14 +93,14 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
         size_t max_swap = 0;
         for (int i = 0; i < dim; i++) max_swap += size[i];
         while (swap_count < max_swap) {
-            size_t index = hash_functions[table_idx](curkey);
-            if (static_cast<double>(active[index]) / size[index] > 0.5) rehash(index);
+            size_t index = hash_functions[table_idx](*curkey);
 
             if (!hash_table[table_idx][index].occupied) {
-                hash_table[table_idx][index].key = curkey;
-                hash_table[table_idx][index].value = curval;
+                hash_table[table_idx][index].key = *curkey;
+                hash_table[table_idx][index].value = *curval;
                 hash_table[table_idx][index].occupied = true;
-                active[index]++;
+                active[table_idx]++;
+                if (static_cast<double>(active[table_idx]) / size[table_idx] > 0.5) rehash(table_idx);
                 return;
             }
 
@@ -110,8 +111,10 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
             swap_count++;
         }
 
+        Key temp_key = *curkey;
+        T temp_val = *curval;
         rehash(0);
-        emplace(const_cast<Key&>(*curkey), const_cast<T&>(*curval));
+        emplace(temp_key, temp_val);
     }
 
     T& find(const Key& key) override {
