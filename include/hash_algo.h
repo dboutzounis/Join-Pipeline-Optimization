@@ -1,12 +1,13 @@
 #pragma once
 #include <iostream>
 #include <unordered_map>
+#include <vector>
 
 // T vector<size_t> at the moment.
 template <typename Key, typename T>
 class Hash_Algorithm {
    public:
-    virtual void emplace(const Key& key, T value) = 0;
+    virtual void emplace(const Key& key, const T& value) = 0;
     virtual T& find(const Key& key) = 0;
     virtual void print() const = 0;
 };
@@ -16,7 +17,7 @@ class Base_Solution : public Hash_Algorithm<Key, T> {
     std::unordered_map<Key, T> hash_table;
 
    public:
-    void emplace(const Key& key, T value) override { hash_table.emplace(key, value); }
+    void emplace(const Key& key, const T& value) override { hash_table.emplace(key, value); }
 
     T& find(const Key& key) override {
         auto itr = hash_table.find(key);
@@ -41,4 +42,47 @@ class Base_Solution : public Hash_Algorithm<Key, T> {
         }
         std::cout << "}\n";
     }
+};
+
+template <typename Key, typename T>
+class Cuckoo : public Hash_Algorithm<Key, T> {
+    struct Bucket {
+        Key key;
+        T value;
+        bool occupied;
+
+        Bucket() : occupied(false) {}
+    };
+    size_t *size, dim, *active;
+    std::vector<std::vector<Bucket>> hash_table;
+    std::vector<std::function<size_t(const Key&)>> hash_functions;
+
+    size_t hash_with_seed(const Key& key, size_t seed, size_t i) const { return (std::hash<Key>{}(key) ^ (seed * 0x9e3779b97f4a7c15ULL)) % size[i]; }
+
+   public:
+    Cuckoo(size_t dim = 2, size_t size = 1024) : dim(dim), size(new size_t[dim]), active(new size_t[dim]), hash_table(dim, std::vector<Bucket>(size)) {
+        for (int i = 0; i < dim; i++) {
+            this->size[i] = size;
+            this->active[i] = 0;
+            hash_functions.push_back([this, i](const Key& key) { return hash_with_seed(key, i + 1, i); })
+        }
+    }
+
+    ~Cuckoo() {
+        delete[] size;
+        delete[] active;
+    }
+    void emplace(const Key& key, const T& value) override {}
+
+    T& find(const Key& key) override {
+        for (size_t i = 0; i < dim; i++) {
+            size_t index = hash_functions[i](key);
+            auto& bucket = hash_table[i][index];
+            if (bucket.occupied && bucket.key == key) return bucket.value;
+        }
+        static T dummy{};
+        return dummy;
+    }
+
+    void print() const {}
 };
