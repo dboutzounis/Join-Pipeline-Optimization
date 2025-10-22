@@ -125,5 +125,29 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
         return dummy;
     }
 
-    void print() const {}
+    void print() const override {
+        std::cout << "{\n";
+        for (size_t t = 0; t < dim; t++) {
+            std::cout << " Table " << t << " (size=" << size[t] << ", active=" << active[t] << "):\n";
+            for (size_t i = 0; i < size[t]; i++) {
+                const auto& bucket = hash_table[t][i];
+                if (!bucket.occupied) continue;
+
+                std::cout << "  [" << i << "] " << bucket.key << " : ";
+                if constexpr (std::is_same_v<T, std::vector<size_t>>) {
+                    std::cout << "[";
+                    for (size_t j = 0; j < bucket.value.size(); j++) {
+                        std::cout << bucket.value[j];
+                        if (j + 1 < bucket.value.size()) std::cout << ", ";
+                    }
+                    std::cout << "]";
+                } else {
+                    std::cout << bucket.value;
+                }
+                std::cout << "\n";
+            }
+            std::cout << "\n";
+        }
+        std::cout << "}\n";
+    }
 };
