@@ -86,35 +86,33 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
         delete[] active;
     }
     void emplace(const Key& key, const T& value) override {
-        const Key* curkey = &key;
-        const T* curval = &value;
+        Key curkey = key;
+        T curval = value;
         size_t table_idx = 0;
         size_t swap_count = 0;
         size_t max_swap = 0;
         for (int i = 0; i < dim; i++) max_swap += size[i];
         while (swap_count < max_swap) {
-            size_t index = hash_functions[table_idx](*curkey);
+            size_t index = hash_functions[table_idx](curkey);
 
             if (!hash_table[table_idx][index].occupied) {
-                hash_table[table_idx][index].key = *curkey;
-                hash_table[table_idx][index].value = *curval;
+                hash_table[table_idx][index].key = curkey;
+                hash_table[table_idx][index].value = curval;
                 hash_table[table_idx][index].occupied = true;
                 active[table_idx]++;
                 if (static_cast<double>(active[table_idx]) / size[table_idx] > 0.5) rehash(table_idx);
                 return;
             }
 
-            std::swap(const_cast<Key&>(*curkey), hash_table[table_idx][index].key);
-            std::swap(const_cast<T&>(*curval), hash_table[table_idx][index].value);
+            std::swap(curkey, hash_table[table_idx][index].key);
+            std::swap(curval, hash_table[table_idx][index].value);
 
             table_idx = (table_idx + 1) % dim;
             swap_count++;
         }
 
-        Key temp_key = *curkey;
-        T temp_val = *curval;
         rehash(0);
-        emplace(temp_key, temp_val);
+        emplace(curkey, curval);
     }
 
     T& find(const Key& key) override {
