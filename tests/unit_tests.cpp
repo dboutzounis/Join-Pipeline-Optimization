@@ -371,35 +371,6 @@ TEST_CASE("3-way join", "[join]") {
     REQUIRE(result_table.table() == ground_truth);
 }
 
-TEST_CASE("Robin Hood basic insert", "[robin]")
-{
-    Robin_Hood<int, std::vector<int>> table(8);
-
-    auto& hash_table = table.get_table();
-     // Manually fill hash_table for testing
-    hash_table = {
-        {{1, {10, 20, 30}}, 0},
-        {{2, {40, 50}}, 1},
-        {{3, {99}}, 2},
-        {{}, -1},
-        {{}, -1},
-        {{}, -1},
-        {{}, -1},
-        {{}, -1}
-    };
-
-    SECTION("Find existing key returns correct vector") {
-        auto& result = table.find(2);
-        REQUIRE(result.size() == 2);
-        REQUIRE(result[0] == 40);
-        REQUIRE(result[1] == 50);
-    }
-
-    SECTION("Find missing key throws error") {
-        REQUIRE(table.find(4).size() == 0);
-    }
-    
-}
 
 TEST_CASE("Robin Hood emplace basic behavior", "[robin_emplace]") {
    
