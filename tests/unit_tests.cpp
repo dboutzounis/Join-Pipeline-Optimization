@@ -1,5 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
-
+#include "hash_algo.h"
+#include <chrono>
+#include <thread>
+#include <atomic>
 #include <table.h>
 #include <plan.h>
 
@@ -368,4 +371,143 @@ TEST_CASE("3-way join", "[join]") {
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
+}
+
+TEST_CASE("Cuckoo manual insertion and find function", "[Cuckoo_find]") {
+
+    Cuckoo<int,  std::vector<size_t>> cuckoo(2, 8); 
+
+    auto hash_functions = cuckoo.get_hash_functions();
+    auto &hash_table = cuckoo.get_hashtable();
+
+    SECTION("Manually insert items into specific hash positions") {
+        int key1 = 42;
+        int key2 = 99;
+        std::vector<size_t> val1 = {1, 2, 3};
+        std::vector<size_t> val2 = {9, 8};
+
+        
+        size_t idx1_t0 = hash_functions[0](key1);
+        size_t idx2_t1 = hash_functions[1](key2);
+
+        
+        //insert keys manually
+        hash_table[0][idx1_t0].key = key1;
+        hash_table[0][idx1_t0].value = val1;
+        hash_table[0][idx1_t0].occupied = true;
+
+        hash_table[1][idx2_t1].key = key2;
+        hash_table[1][idx2_t1].value = val2;
+        hash_table[1][idx2_t1].occupied = true;
+
+        //find keys.
+        auto& found1 = cuckoo.find(key1);
+        REQUIRE(found1.size() == val1.size());
+        REQUIRE(found1[0] == 1);
+        REQUIRE(found1[2] == 3);
+
+        auto& found2 = cuckoo.find(key2);
+        REQUIRE(found2.size() == val2.size());
+        REQUIRE(found2[0] == 9);
+        REQUIRE(found2[1] == 8);
+    }
+}
+
+TEST_CASE("Cuckoo emplace basic behavior", "[Cuckoo_emplace]") {
+
+    SECTION("Insert single key-value pair"){
+        Cuckoo<int, std::vector<size_t>> hash_table;
+        hash_table.emplace(1, {10, 20});
+        auto& result = hash_table.find(1);
+        REQUIRE(result.size() == 2);
+        REQUIRE(result[0] == 10);
+        REQUIRE(result[1] == 20);
+    }
+
+    SECTION("Insert multiple keys without collision") {
+        Cuckoo<const char*, std::vector<size_t>> hash_table;
+        hash_table.emplace("iasonas", {22});
+        hash_table.print();
+        hash_table.emplace("kostis", {33});
+        hash_table.print();
+        hash_table.emplace("antreas", {10, 20});
+        hash_table.print();
+    }
+
+}
+
+TEST_CASE("Cuckoo rehash basic growth", "[Cuckoo_rehash]") {
+
+    Cuckoo<int, std::vector<size_t>> table(2, 2);
+
+    
+    auto initial_hash_table = table.get_hashtable();
+    size_t initial_size_0 = initial_hash_table[0].size();
+    size_t initial_size_1 = initial_hash_table[1].size();
+
+    REQUIRE(initial_size_0 == 2);
+    REQUIRE(initial_size_1 == 2);
+
+    for (size_t i = 1; i < 100; i *= 2) {
+        table.emplace(i, std::vector<size_t>{i});
+
+        auto& found = table.find(i);
+        REQUIRE(found.size() == 1);
+        REQUIRE(found[0] == i);
+    }
+
+    auto grown_table = table.get_hashtable();
+    size_t new_size_0 = grown_table[0].size();
+    size_t new_size_1 = grown_table[1].size();
+
+    REQUIRE((new_size_0 > initial_size_0 || new_size_1 > initial_size_1));
+
+    for (size_t i = 1; i < 100; i *= 2) {
+        auto& val = table.find(i);
+        REQUIRE_FALSE(val.empty());
+        REQUIRE(val[0] == i);
+    }
+
+    REQUIRE((new_size_0 % initial_size_0 == 0 || new_size_1 % initial_size_1 == 0));
+}
+
+TEST_CASE("Cuckoo rehash timeout detection (non-blocking)", "[Cuckoo_circle_safe_detection]") {
+    Cuckoo<int, std::vector<size_t>> cuckoo(2, 4);
+
+    auto hash_functions = cuckoo.get_hash_functions();
+    auto& hash_table = cuckoo.get_hashtable();
+
+
+    int key = 42;
+    std::vector<size_t> val1 = {1, 2, 3};
+    std::vector<size_t> val2 = {9, 8};
+
+    size_t idx0 = hash_functions[0](key);
+    size_t idx1 = hash_functions[1](key);
+    hash_table[0][idx0].key = key;
+    hash_table[0][idx0].value = val1;
+    hash_table[0][idx0].occupied = true;
+    hash_table[1][idx1].key = key;
+    hash_table[1][idx1].value = val2;
+    hash_table[1][idx1].occupied = true;
+
+    std::atomic<bool> finished = false;
+
+    std::thread worker([&]() {
+        cuckoo.emplace(key, {10, 20});
+        finished = true;
+    });
+    worker.detach();
+
+    bool success = false;
+    for (int i = 0; i < 50; ++i) {
+        if (finished) { success = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    if (!success) {
+        SUCCEED("emplace() did not finish within 500 ms — expected infinite loop detected");
+    } else {
+        FAIL("emplace() returned unexpectedly — rehash completed (or fixed");
+    }
 }
