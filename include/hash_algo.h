@@ -62,8 +62,6 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
     std::vector<Bucket> hash_table;
     size_t size, H, active, bitmap_size;
 
-    size_t hash(const Key& k) const { return std::hash<Key>{}(k) % size; }
-
     inline void set_bit(std::vector<uint8_t>& bitmap, size_t i) { bitmap[i >> 3] |= static_cast<uint8_t>(1u << (i & 7)); }
 
     inline void clear_bit(std::vector<uint8_t>& bitmap, size_t i) { bitmap[i >> 3] &= static_cast<uint8_t>(~(1u << (i & 7))); }
@@ -102,6 +100,10 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
         bitmap_size = (H + (8 * sizeof(uint8_t) - 1)) / (8 * sizeof(uint8_t));
         hash_table.assign(size, Bucket(bitmap_size));
     }
+
+    size_t hash(const Key& k) const { return std::hash<Key>{}(k) % size; }
+
+    std::vector<Bucket>& get_hashtable() { return hash_table; }
 
     T& find(const Key& key) override {
         size_t index = hash(key);

@@ -1,11 +1,11 @@
+#include <plan.h>
+#include <table.h>
+
 #include <catch2/catch_test_macros.hpp>
 
-#include <table.h>
-#include <plan.h>
+#include "hash_algo.h"
 
-void sort(std::vector<std::vector<Data>>& table) {
-    std::sort(table.begin(), table.end());
-}
+void sort(std::vector<std::vector<Data>>& table) { std::sort(table.begin(), table.end()); }
 
 TEST_CASE("Empty join", "[join]") {
     Plan plan;
@@ -33,7 +33,9 @@ TEST_CASE("One line join", "[join]") {
     plan.new_scan_node(1, {{0, DataType::INT32}});
     plan.new_join_node(true, 0, 1, 0, 0, {{0, DataType::INT32}, {1, DataType::INT32}});
     std::vector<std::vector<Data>> data{
-        {1, },
+        {
+            1,
+        },
     };
     std::vector<DataType> types{DataType::INT32};
     Table table(std::move(data), std::move(types));
@@ -51,7 +53,10 @@ TEST_CASE("One line join", "[join]") {
     REQUIRE(result.columns[1].type == DataType::INT32);
     auto result_table = Table::from_columnar(result);
     std::vector<std::vector<Data>> ground_truth{
-        {1, 1,},
+        {
+            1,
+            1,
+        },
     };
     REQUIRE(result_table.table() == ground_truth);
 }
@@ -62,9 +67,15 @@ TEST_CASE("Simple join", "[join]") {
     plan.new_scan_node(1, {{0, DataType::INT32}});
     plan.new_join_node(true, 0, 1, 0, 0, {{0, DataType::INT32}, {1, DataType::INT32}});
     std::vector<std::vector<Data>> data{
-        {1,},
-        {2,},
-        {3,},
+        {
+            1,
+        },
+        {
+            2,
+        },
+        {
+            3,
+        },
     };
     std::vector<DataType> types{DataType::INT32};
     Table table(std::move(data), std::move(types));
@@ -82,9 +93,18 @@ TEST_CASE("Simple join", "[join]") {
     REQUIRE(result.columns[1].type == DataType::INT32);
     auto result_table = Table::from_columnar(result);
     std::vector<std::vector<Data>> ground_truth{
-        {1, 1,},
-        {2, 2,},
-        {3, 3,},
+        {
+            1,
+            1,
+        },
+        {
+            2,
+            2,
+        },
+        {
+            3,
+            3,
+        },
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
@@ -96,14 +116,26 @@ TEST_CASE("Empty Result", "[join]") {
     plan.new_scan_node(1, {{0, DataType::INT32}});
     plan.new_join_node(true, 0, 1, 0, 0, {{0, DataType::INT32}, {1, DataType::INT32}});
     std::vector<std::vector<Data>> data1{
-        {1,},
-        {2,},
-        {3,},
+        {
+            1,
+        },
+        {
+            2,
+        },
+        {
+            3,
+        },
     };
     std::vector<std::vector<Data>> data2{
-        {4,},
-        {5,},
-        {6,},
+        {
+            4,
+        },
+        {
+            5,
+        },
+        {
+            6,
+        },
     };
     std::vector<DataType> types{DataType::INT32};
     Table table1(std::move(data1), types);
@@ -128,10 +160,18 @@ TEST_CASE("Multiple same keys", "[join]") {
     plan.new_scan_node(1, {{0, DataType::INT32}});
     plan.new_join_node(true, 0, 1, 0, 0, {{0, DataType::INT32}, {1, DataType::INT32}});
     std::vector<std::vector<Data>> data1{
-        {1,},
-        {1,},
-        {2,},
-        {3,},
+        {
+            1,
+        },
+        {
+            1,
+        },
+        {
+            2,
+        },
+        {
+            3,
+        },
     };
     std::vector<DataType> types{DataType::INT32};
     Table table1(std::move(data1), std::move(types));
@@ -149,12 +189,30 @@ TEST_CASE("Multiple same keys", "[join]") {
     REQUIRE(result.columns[1].type == DataType::INT32);
     auto result_table = Table::from_columnar(result);
     std::vector<std::vector<Data>> ground_truth{
-        {1, 1,},
-        {1, 1,},
-        {1, 1,},
-        {1, 1,},
-        {2, 2,},
-        {3, 3,},
+        {
+            1,
+            1,
+        },
+        {
+            1,
+            1,
+        },
+        {
+            1,
+            1,
+        },
+        {
+            1,
+            1,
+        },
+        {
+            2,
+            2,
+        },
+        {
+            3,
+            3,
+        },
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
@@ -166,11 +224,21 @@ TEST_CASE("NULL keys", "[join]") {
     plan.new_scan_node(1, {{0, DataType::INT32}});
     plan.new_join_node(true, 0, 1, 0, 0, {{0, DataType::INT32}, {1, DataType::INT32}});
     std::vector<std::vector<Data>> data1{
-        {1,               },
-        {1,               },
-        {std::monostate{},},
-        {2,               },
-        {3,               },
+        {
+            1,
+        },
+        {
+            1,
+        },
+        {
+            std::monostate{},
+        },
+        {
+            2,
+        },
+        {
+            3,
+        },
     };
     std::vector<DataType> types{DataType::INT32};
     Table table1(std::move(data1), std::move(types));
@@ -188,12 +256,30 @@ TEST_CASE("NULL keys", "[join]") {
     REQUIRE(result.columns[1].type == DataType::INT32);
     auto result_table = Table::from_columnar(result);
     std::vector<std::vector<Data>> ground_truth{
-        {1, 1,},
-        {1, 1,},
-        {1, 1,},
-        {1, 1,},
-        {2, 2,},
-        {3, 3,},
+        {
+            1,
+            1,
+        },
+        {
+            1,
+            1,
+        },
+        {
+            1,
+            1,
+        },
+        {
+            1,
+            1,
+        },
+        {
+            2,
+            2,
+        },
+        {
+            3,
+            3,
+        },
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
@@ -206,11 +292,26 @@ TEST_CASE("Multiple columns", "[join]") {
     plan.new_join_node(true, 0, 1, 0, 1, {{0, DataType::INT32}, {2, DataType::INT32}, {1, DataType::VARCHAR}});
     using namespace std::string_literals;
     std::vector<std::vector<Data>> data1{
-        {1               , "xxx"s,},
-        {1               , "yyy"s,},
-        {std::monostate{}, "zzz"s,},
-        {2               , "uuu"s,},
-        {3               , "vvv"s,},
+        {
+            1,
+            "xxx"s,
+        },
+        {
+            1,
+            "yyy"s,
+        },
+        {
+            std::monostate{},
+            "zzz"s,
+        },
+        {
+            2,
+            "uuu"s,
+        },
+        {
+            3,
+            "vvv"s,
+        },
     };
     std::vector<DataType> types{DataType::INT32, DataType::VARCHAR};
     Table table1(std::move(data1), std::move(types));
@@ -229,12 +330,7 @@ TEST_CASE("Multiple columns", "[join]") {
     REQUIRE(result.columns[2].type == DataType::VARCHAR);
     auto result_table = Table::from_columnar(result);
     std::vector<std::vector<Data>> ground_truth{
-        {1, 1, "xxx"s},
-        {1, 1, "xxx"s},
-        {1, 1, "yyy"s},
-        {1, 1, "yyy"s},
-        {2, 2, "uuu"s},
-        {3, 3, "vvv"s},
+        {1, 1, "xxx"s}, {1, 1, "xxx"s}, {1, 1, "yyy"s}, {1, 1, "yyy"s}, {2, 2, "uuu"s}, {3, 3, "vvv"s},
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
@@ -247,11 +343,26 @@ TEST_CASE("Build on right", "[join]") {
     plan.new_join_node(false, 0, 1, 0, 1, {{0, DataType::INT32}, {2, DataType::INT32}, {1, DataType::VARCHAR}});
     using namespace std::string_literals;
     std::vector<std::vector<Data>> data1{
-        {1               , "xxx"s,},
-        {1               , "yyy"s,},
-        {std::monostate{}, "zzz"s,},
-        {2               , "uuu"s,},
-        {3               , "vvv"s,},
+        {
+            1,
+            "xxx"s,
+        },
+        {
+            1,
+            "yyy"s,
+        },
+        {
+            std::monostate{},
+            "zzz"s,
+        },
+        {
+            2,
+            "uuu"s,
+        },
+        {
+            3,
+            "vvv"s,
+        },
     };
     std::vector<DataType> types{DataType::INT32, DataType::VARCHAR};
     Table table1(std::move(data1), std::move(types));
@@ -270,12 +381,7 @@ TEST_CASE("Build on right", "[join]") {
     REQUIRE(result.columns[2].type == DataType::VARCHAR);
     auto result_table = Table::from_columnar(result);
     std::vector<std::vector<Data>> ground_truth{
-        {1, 1, "xxx"s},
-        {1, 1, "xxx"s},
-        {1, 1, "yyy"s},
-        {1, 1, "yyy"s},
-        {2, 2, "uuu"s},
-        {3, 3, "vvv"s},
+        {1, 1, "xxx"s}, {1, 1, "xxx"s}, {1, 1, "yyy"s}, {1, 1, "yyy"s}, {2, 2, "uuu"s}, {3, 3, "vvv"s},
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
@@ -289,9 +395,15 @@ TEST_CASE("leftdeep 2-level join", "[join]") {
     plan.new_join_node(true, 0, 1, 0, 0, {{0, DataType::INT32}, {1, DataType::INT32}});
     plan.new_join_node(false, 3, 2, 0, 0, {{0, DataType::INT32}, {1, DataType::INT32}, {2, DataType::INT32}});
     std::vector<std::vector<Data>> data{
-        {1,},
-        {2,},
-        {3,},
+        {
+            1,
+        },
+        {
+            2,
+        },
+        {
+            3,
+        },
     };
     std::vector<DataType> types{DataType::INT32};
     Table table(std::move(data), std::move(types));
@@ -312,9 +424,21 @@ TEST_CASE("leftdeep 2-level join", "[join]") {
     REQUIRE(result.columns[2].type == DataType::INT32);
     auto result_table = Table::from_columnar(result);
     std::vector<std::vector<Data>> ground_truth{
-        {1, 1, 1,},
-        {2, 2, 2,},
-        {3, 3, 3,},
+        {
+            1,
+            1,
+            1,
+        },
+        {
+            2,
+            2,
+            2,
+        },
+        {
+            3,
+            3,
+            3,
+        },
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
@@ -368,4 +492,224 @@ TEST_CASE("3-way join", "[join]") {
     };
     sort(result_table.table());
     REQUIRE(result_table.table() == ground_truth);
+}
+
+TEST_CASE("Hopscotch manual insertion and find function", "[Hopscotch_find]") {
+    Hopscotch<int, std::vector<size_t>> hop(4, 8);
+
+    auto& hash_table = hop.get_hashtable();
+    int key1 = 5;
+    int key2 = 13;
+
+    std::vector<size_t> val1 = {1, 2, 3};
+    std::vector<size_t> val2 = {9, 8};
+
+    size_t idx1 = hop.hash(key1);
+    hash_table[idx1].key = key1;
+    hash_table[idx1].value = val1;
+    hash_table[idx1].occupied = true;
+
+    size_t idx2 = (idx1 + 1) % 8;
+    hash_table[idx2].key = key2;
+    hash_table[idx2].value = val2;
+    hash_table[idx2].occupied = true;
+
+    hash_table[idx1].bitmap[1 >> 3] |= static_cast<uint8_t>(1u << (1 & 7));
+
+    SECTION("Find key that sits at base hash position") {
+        auto& found1 = hop.find(key1);
+        REQUIRE(found1.size() == val1.size());
+        REQUIRE(found1[0] == 1);
+        REQUIRE(found1[2] == 3);
+    }
+
+    SECTION("Find key that sits in neighborhood (collision case)") {
+        auto& found2 = hop.find(key2);
+        REQUIRE(found2.size() == val2.size());
+        REQUIRE(found2[0] == 9);
+        REQUIRE(found2[1] == 8);
+    }
+
+    SECTION("Find non-existing key returns dummy") {
+        auto& found3 = hop.find(999);
+        REQUIRE(found3.empty());
+    }
+}
+
+TEST_CASE("Hopscotch emplace basic behavior", "[Hopscotch_emplace]") {
+    SECTION("Insert single key-value pair") {
+        Hopscotch<int, std::vector<size_t>> hop(4, 8);
+        hop.emplace(1, {10, 20});
+        auto& result = hop.find(1);
+        REQUIRE(result.size() == 2);
+        REQUIRE(result[0] == 10);
+        REQUIRE(result[1] == 20);
+    }
+
+    SECTION("Insert multiple keys without collisions") {
+        Hopscotch<std::string, std::vector<size_t>> hop(4, 32);
+        hop.emplace("iasonas", {22});
+        auto& val1 = hop.find("iasonas");
+        hop.print();
+        REQUIRE_FALSE(val1.empty());
+        REQUIRE(val1.size() == 1);
+        REQUIRE(val1[0] == 22);
+        hop.emplace("dimitris", {33});
+        auto& val2 = hop.find("dimitris");
+        hop.print();
+        REQUIRE_FALSE(val2.empty());
+        REQUIRE(val2.size() == 1);
+        REQUIRE(val2[0] == 33);
+        hop.emplace("spyros", {10, 20});
+        auto& val3 = hop.find("spyros");
+        hop.print();
+        REQUIRE_FALSE(val3.empty());
+        REQUIRE(val3.size() == 2);
+        REQUIRE(val3[0] == 10);
+        REQUIRE(val3[1] == 20);
+    }
+}
+
+TEST_CASE("Hopscotch emplace with collisions", "[Hopscotch_emplace_collision]") {
+    Hopscotch<int, std::vector<size_t>> hop(4, 8);
+
+    int k1 = 5;
+    int k2 = 13;
+    int k3 = 21;
+    int k4 = 22;
+    int k5 = 29;
+
+    std::vector<size_t> v1 = {1};
+    std::vector<size_t> v2 = {2};
+    std::vector<size_t> v3 = {3};
+    std::vector<size_t> v4 = {4};
+    std::vector<size_t> v5 = {5};
+
+    hop.emplace(k1, v1);
+    hop.emplace(k2, v2);
+    hop.emplace(k3, v3);
+    REQUIRE(hop.find(k1)[0] == 1);
+    REQUIRE(hop.find(k2)[0] == 2);
+    REQUIRE(hop.find(k3)[0] == 3);
+
+    hop.emplace(k4, v4);
+    hop.print();
+    hop.emplace(k5, v5);
+    hop.print();
+    REQUIRE(hop.find(k1)[0] == 1);
+    REQUIRE(hop.find(k2)[0] == 2);
+    REQUIRE(hop.find(k3)[0] == 3);
+    REQUIRE(hop.find(k4)[0] == 4);
+    REQUIRE(hop.find(k5)[0] == 5);
+}
+
+TEST_CASE("Hopscotch rehash test 1", "[Hopscotch_rehash_1]") {
+    Hopscotch<int, std::vector<size_t>> hop(2, 2);
+    auto initial_hash_table = hop.get_hashtable();
+    size_t initial_size = initial_hash_table.size();
+
+    REQUIRE(initial_size == 2);
+
+    int k1 = 5;
+    int k2 = 13;
+    int k3 = 21;
+
+    std::vector<size_t> v1 = {1};
+    std::vector<size_t> v2 = {2};
+    std::vector<size_t> v3 = {3};
+
+    hop.emplace(k1, v1);
+    hop.emplace(k2, v2);
+    hop.emplace(k3, v3);
+    auto& found1 = hop.find(k1);
+    auto& found2 = hop.find(k2);
+    auto& found3 = hop.find(k3);
+    REQUIRE(found1.size() == 1);
+    REQUIRE(found1[0] == v1[0]);
+    REQUIRE(found2.size() == 1);
+    REQUIRE(found2[0] == v2[0]);
+    REQUIRE(found3.size() == 1);
+    REQUIRE(found3[0] == v3[0]);
+
+    auto grown_table = hop.get_hashtable();
+    size_t new_size = grown_table.size();
+
+    REQUIRE(new_size > initial_size);
+    REQUIRE(new_size % initial_size == 0);
+}
+
+TEST_CASE("Hopscotch rehash test 2", "[Hopscotch_rehash_2]") {
+    Hopscotch<int, std::vector<size_t>> hop(2, 2);
+    auto initial_hash_table = hop.get_hashtable();
+    size_t initial_size = initial_hash_table.size();
+
+    REQUIRE(initial_size == 2);
+
+    int k1 = 0;
+    int k2 = 1;
+    int k3 = 3;
+
+    std::vector<size_t> v1 = {1};
+    std::vector<size_t> v2 = {2};
+    std::vector<size_t> v3 = {3};
+
+    hop.emplace(k1, v1);
+    hop.emplace(k2, v2);
+    hop.emplace(k3, v3);
+    auto& found1 = hop.find(k1);
+    auto& found2 = hop.find(k2);
+    auto& found3 = hop.find(k3);
+    REQUIRE(found1.size() == 1);
+    REQUIRE(found1[0] == v1[0]);
+    REQUIRE(found2.size() == 1);
+    REQUIRE(found2[0] == v2[0]);
+    REQUIRE(found3.size() == 1);
+    REQUIRE(found3[0] == v3[0]);
+
+    auto grown_table = hop.get_hashtable();
+    size_t new_size = grown_table.size();
+
+    REQUIRE(new_size > initial_size);
+    REQUIRE(new_size % initial_size == 0);
+}
+
+TEST_CASE("Hopscotch rehash test 3", "[Hopscotch_rehash_3]") {
+    Hopscotch<int, std::vector<size_t>> hop(2, 4);
+    auto initial_hash_table = hop.get_hashtable();
+    size_t initial_size = initial_hash_table.size();
+
+    REQUIRE(initial_size == 4);
+
+    int k1 = 1;
+    int k2 = 2;
+    int k3 = 6;
+    int k4 = 5;
+
+    std::vector<size_t> v1 = {1};
+    std::vector<size_t> v2 = {2};
+    std::vector<size_t> v3 = {3};
+    std::vector<size_t> v4 = {4};
+
+    hop.emplace(k1, v1);
+    hop.emplace(k2, v2);
+    hop.emplace(k3, v3);
+    hop.emplace(k4, v4);
+    auto& found1 = hop.find(k1);
+    auto& found2 = hop.find(k2);
+    auto& found3 = hop.find(k3);
+    auto& found4 = hop.find(k4);
+    REQUIRE(found1.size() == 1);
+    REQUIRE(found1[0] == v1[0]);
+    REQUIRE(found2.size() == 1);
+    REQUIRE(found2[0] == v2[0]);
+    REQUIRE(found3.size() == 1);
+    REQUIRE(found3[0] == v3[0]);
+    REQUIRE(found4.size() == 1);
+    REQUIRE(found4[0] == v4[0]);
+
+    auto grown_table = hop.get_hashtable();
+    size_t new_size = grown_table.size();
+
+    REQUIRE(new_size > initial_size);
+    REQUIRE(new_size % initial_size == 0);
 }
