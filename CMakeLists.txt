@@ -118,6 +118,24 @@ target_include_directories(run PRIVATE include)
 target_include_directories(build_database PRIVATE include)
 target_include_directories(unit_tests PRIVATE include)
 
+add_executable(run_base ${SIGMODPC_SRC} tests/read_sql.cpp)
+target_link_libraries(run_base PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
+target_compile_definitions(run_base PRIVATE TEAMOPT_USE_DUCKDB HASH_ALGO_TYPE=Base_Solution)
+target_include_directories(run_base PRIVATE include)
 
+add_executable(run_robin ${SIGMODPC_SRC} tests/read_sql.cpp)
+target_link_libraries(run_robin PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
+target_compile_definitions(run_robin PRIVATE TEAMOPT_USE_DUCKDB HASH_ALGO_TYPE=Robin_Hood)
+target_include_directories(run_robin PRIVATE include)
+
+add_executable(run_hopscotch ${SIGMODPC_SRC} tests/read_sql.cpp)
+target_link_libraries(run_hopscotch PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
+target_compile_definitions(run_hopscotch PRIVATE TEAMOPT_USE_DUCKDB HASH_ALGO_TYPE=Hopscotch)
+target_include_directories(run_hopscotch PRIVATE include)
+
+add_executable(run_cuckoo ${SIGMODPC_SRC} tests/read_sql.cpp)
+target_link_libraries(run_cuckoo PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
+target_compile_definitions(run_cuckoo PRIVATE TEAMOPT_USE_DUCKDB HASH_ALGO_TYPE=Cuckoo)
+target_include_directories(run_cuckoo PRIVATE include)
 
 

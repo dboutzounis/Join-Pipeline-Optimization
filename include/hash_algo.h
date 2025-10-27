@@ -1,4 +1,9 @@
 #pragma once
+
+#ifndef HASH_ALGO_TYPE
+#define HASH_ALGO_TYPE Base_Solution
+#endif
+
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -6,7 +11,6 @@
 #include <unordered_map>
 #include <vector>
 
-// T vector<size_t> at the moment.
 template <typename Key, typename T>
 class Hash_Algorithm {
    public:
@@ -52,7 +56,7 @@ class Robin_Hood : public Hash_Algorithm<Key, T> {
     int capacity, num_elements;
 
    public:
-    Robin_Hood(size_t table_size = 2000) : hash_table(table_size, {{}, -1}), capacity(table_size), num_elements(0) {}
+    Robin_Hood(size_t table_size = 512) : hash_table(table_size, {{}, -1}), capacity(table_size), num_elements(0) {}
 
     std::vector<std::pair<std::pair<Key, T>, int>>& get_table();
 
@@ -133,7 +137,7 @@ void Robin_Hood<Key, T>::rehash(size_t new_capacity) {
 
 template <typename Key, typename T>
 void Robin_Hood<Key, T>::emplace(const Key& key, const T& value) {
-    if ((num_elements + 1) > 0.7 * capacity) {
+    if ((num_elements + 1) > 0.5 * capacity) {
         rehash(capacity * 2);
     }
 
@@ -180,8 +184,6 @@ T& Robin_Hood<Key, T>::find(const Key& key) {
         auto& value = entry.first.second;
         auto& target_tsl = entry.second;
 
-        std::cout << target_tsl << "\n";
-
         if (entry.second != -1 && target_key == key) return value;
 
         index = (index + 1) % hash_table.size();
@@ -191,6 +193,7 @@ T& Robin_Hood<Key, T>::find(const Key& key) {
     static T dummy{};
     return dummy;
 }
+
 template <typename Key, typename T>
 class Hopscotch : public Hash_Algorithm<Key, T> {
     struct Bucket {
@@ -241,7 +244,7 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
     }
 
    public:
-    Hopscotch(size_t H, size_t size = 2048) : H(H), size(size), active(0) {
+    Hopscotch(size_t H = 8, size_t size = 512) : H(H), size(size), active(0) {
         bitmap_size = (H + (8 * sizeof(uint8_t) - 1)) / (8 * sizeof(uint8_t));
         hash_table.assign(size, Bucket(bitmap_size));
     }
@@ -331,6 +334,7 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
         }
     }
 };
+
 template <typename Key, typename T>
 class Cuckoo : public Hash_Algorithm<Key, T> {
     struct Bucket {
@@ -359,7 +363,7 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
     }
 
    public:
-    Cuckoo(size_t dim = 2, size_t size = 1024)
+    Cuckoo(size_t dim = 2, size_t size = 512)
         : dim(dim), size(new size_t[dim]), active(new size_t[dim]), total_active(0), hash_table(dim, std::vector<Bucket>(size)) {
         for (int i = 0; i < dim; i++) {
             this->size[i] = size;
