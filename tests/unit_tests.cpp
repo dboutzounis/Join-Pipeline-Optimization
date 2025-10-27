@@ -497,6 +497,143 @@ TEST_CASE("3-way join", "[join]") {
     REQUIRE(result_table.table() == ground_truth);
 }
 
+TEST_CASE("Robin Hood manual insertion and find verification", "[robin_find]") {
+    Robin_Hood<int, std::vector<size_t>> table(5);
+    auto& ht = table.get_table();
+
+    size_t idx1 = hash_index(1, ht.size());
+    size_t idx2 = hash_index(3, ht.size());
+    size_t idx3 = hash_index(7, ht.size());
+
+    ht[idx1] = {{1, {10, 20}}, 0};
+    ht[idx2] = {{3, {30}}, 0};
+    ht[idx3] = {{7, {99, 100, 101}}, 1};
+
+    SECTION("Find existing keys manually placed") {
+        auto& result1 = table.find(1);
+        REQUIRE(result1.size() == 2);
+        REQUIRE(result1[0] == 10);
+        REQUIRE(result1[1] == 20);
+
+        auto& result2 = table.find(3);
+        REQUIRE(result2.size() == 1);
+        REQUIRE(result2[0] == 30);
+
+        auto& result3 = table.find(7);
+        REQUIRE(result3.size() == 3);
+        REQUIRE(result3[2] == 101);
+    }
+
+    SECTION("Find missing key returns dummy") {
+        auto& result = table.find(999);
+        REQUIRE(result.size() == 0);
+    }
+
+    table.print();
+}
+TEST_CASE("Robin Hood emplace basic behavior", "[robin_emplace]") {
+    SECTION("Insert single key-value pair") {
+        Robin_Hood<int, std::vector<size_t>> hash_table(3);
+        hash_table.emplace(1, {10, 20});
+        auto& result = hash_table.find(1);
+        REQUIRE(result.size() == 2);
+        REQUIRE(result[0] == 10);
+        REQUIRE(result[1] == 20);
+    }
+
+    SECTION("Insert multiple keys of char* type") {
+        Robin_Hood<const char*, std::vector<size_t>> hash_table(3);
+
+        hash_table.emplace("iasonas", {22});
+        hash_table.emplace("kostis", {33});
+        hash_table.emplace("antreas", {10, 20});
+
+        auto& v1 = hash_table.find("iasonas");
+        auto& v2 = hash_table.find("kostis");
+        auto& v3 = hash_table.find("antreas");
+
+        REQUIRE(v1.size() == 1);
+        REQUIRE(v1[0] == 22);
+
+        REQUIRE(v2.size() == 1);
+        REQUIRE(v2[0] == 33);
+
+        REQUIRE(v3.size() == 2);
+        REQUIRE(v3[0] == 10);
+        REQUIRE(v3[1] == 20);
+    }
+}
+
+TEST_CASE("Robin Hood rehash basic growth and key preservation", "[robin_rehash]") {
+    Robin_Hood<int, std::vector<int>> table(4);
+
+    size_t prev_capacity = table.get_table().size();
+
+    std::vector<int> inserted_keys;
+
+    for (int i = 1; i <= 100; i *= 2) {
+        inserted_keys.push_back(i);
+        table.emplace(i, std::vector<int>{i});
+
+        size_t new_capacity = table.get_table().size();
+
+        if (new_capacity != prev_capacity) {
+            std::cout << "Rehash triggered! "
+                      << "Old: " << prev_capacity << " → New: " << new_capacity << "\n";
+        }
+
+        for (int key : inserted_keys) {
+            auto& result = table.find(key);
+            REQUIRE(result.size() == 1);
+            REQUIRE(result[0] == key);
+        }
+
+        prev_capacity = new_capacity;
+    }
+
+    std::cout << "\nFinal Table after insertions:\n";
+    table.print();
+}
+
+TEST_CASE("Robin Hood handles collisions and preserves correctness", "[robin_collision]") {
+    Robin_Hood<int, std::vector<size_t>> table(5);
+    auto& ht = table.get_table();
+
+    int k1 = 5;
+    int k2 = 10;
+    int k3 = 15;
+
+    table.emplace(k1, {11});
+    table.emplace(k2, {22});
+    table.emplace(k3, {33});
+
+    auto& v1 = table.find(k1);
+    auto& v2 = table.find(k2);
+    auto& v3 = table.find(k3);
+
+    REQUIRE(v1.size() == 1);
+    REQUIRE(v2.size() == 1);
+    REQUIRE(v3.size() == 1);
+
+    REQUIRE(v1[0] == 11);
+    REQUIRE(v2[0] == 22);
+    REQUIRE(v3[0] == 33);
+
+    bool found_k1 = false, found_k2 = false, found_k3 = false;
+    for (auto& entry : ht) {
+        if (entry.second == -1) continue;
+        if (entry.first.first == k1) found_k1 = true;
+        if (entry.first.first == k2) found_k2 = true;
+        if (entry.first.first == k3) found_k3 = true;
+    }
+    REQUIRE(found_k1);
+    REQUIRE(found_k2);
+    REQUIRE(found_k3);
+
+    std::cout << "\n--- Collision Test Table ---\n";
+    table.print();
+}
+
 TEST_CASE("Hopscotch manual insertion and find function", "[Hopscotch_find]") {
     Hopscotch<int, std::vector<size_t>> hop(4, 8);
 
