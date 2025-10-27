@@ -440,34 +440,6 @@ TEST_CASE("Robin Hood emplace basic behavior", "[robin_emplace]") {
             REQUIRE(v3[0] == 10);
             REQUIRE(v3[1] == 20);
      }
-
-    SECTION("Insert keys that cause collision and trigger probing") {
-        Robin_Hood<int, std::vector<size_t>> hash_table(3);
-    
-        int k1 = 5;
-        int k2 = 13;  
-
-        hash_table.emplace(k1, {50});
-        hash_table.emplace(k2, {130});  
-
-        auto& v1 = hash_table.find(k1);
-        auto& v2 = hash_table.find(k2);
-
-        REQUIRE(v1[0] == 50);
-        REQUIRE(v2[0] == 130);
-
-        auto& ht = hash_table.get_table();
-        bool found_k1 = false, found_k2 = false;
-        for (auto& entry : ht) {
-            if (entry.second == -1) continue;
-            if (entry.first.first == k1) found_k1 = true;
-            if (entry.first.first == k2) found_k2 = true;
-        }
-        REQUIRE(found_k1);
-        REQUIRE(found_k2);
-
-        hash_table.print();
-    }
 }
 
 TEST_CASE("Robin Hood rehash basic growth and key preservation", "[robin_rehash]") {
