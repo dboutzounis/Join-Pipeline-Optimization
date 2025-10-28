@@ -176,20 +176,19 @@ std::vector<std::pair<std::pair<Key, T>, int>>& Robin_Hood<Key, T>::get_table() 
 template <typename Key, typename T>
 T& Robin_Hood<Key, T>::find(const Key& key) {
     size_t index = hash_index(key, hash_table.size());
-    size_t source_tsl = 0;
+    int source_tsl = 0;
+    int target_tsl;
 
     do {
         auto& entry = hash_table[index];
         const auto& target_key = entry.first.first;
         auto& value = entry.first.second;
-        auto& target_tsl = entry.second;
+        target_tsl = entry.second;
 
-        if (entry.second != -1 && target_key == key) return value;
-
+        if (entry.second != -1 && target_key == key) return value; 
         index = (index + 1) % hash_table.size();
-        if (source_tsl++ > target_tsl) break;
-    } while (1);
 
+    } while (source_tsl++ <= target_tsl);
     static T dummy{};
     return dummy;
 }

@@ -497,7 +497,7 @@ TEST_CASE("3-way join", "[join]") {
     REQUIRE(result_table.table() == ground_truth);
 }
 
-TEST_CASE("Robin Hood manual insertion and find verification", "[robin_find]") {
+TEST_CASE("Robin Hood manual insertion and find verification", "[robin][robin_find]") {
     Robin_Hood<int, std::vector<size_t>> table(5);
     auto& ht = table.get_table();
 
@@ -525,13 +525,13 @@ TEST_CASE("Robin Hood manual insertion and find verification", "[robin_find]") {
     }
 
     SECTION("Find missing key returns dummy") {
+        Robin_Hood<int, std::vector<size_t>> table(5);
         auto& result = table.find(999);
         REQUIRE(result.size() == 0);
     }
 
-    table.print();
 }
-TEST_CASE("Robin Hood emplace basic behavior", "[robin_emplace]") {
+TEST_CASE("Robin Hood emplace basic behavior", "[robin][robin_emplace]") {
     SECTION("Insert single key-value pair") {
         Robin_Hood<int, std::vector<size_t>> hash_table(3);
         hash_table.emplace(1, {10, 20});
@@ -564,14 +564,15 @@ TEST_CASE("Robin Hood emplace basic behavior", "[robin_emplace]") {
     }
 }
 
-TEST_CASE("Robin Hood rehash basic growth and key preservation", "[robin_rehash]") {
+TEST_CASE("Robin Hood rehash basic growth and key preservation", "[robin][robin_rehash]") {
     Robin_Hood<int, std::vector<int>> table(4);
 
     size_t prev_capacity = table.get_table().size();
 
     std::vector<int> inserted_keys;
 
-    for (int i = 1; i <= 100; i *= 2) {
+    //pushing to the limit.
+    for (int i = 1; i <= 10000; i += 2) {
         inserted_keys.push_back(i);
         table.emplace(i, std::vector<int>{i});
 
@@ -590,12 +591,9 @@ TEST_CASE("Robin Hood rehash basic growth and key preservation", "[robin_rehash]
 
         prev_capacity = new_capacity;
     }
-
-    std::cout << "\nFinal Table after insertions:\n";
-    table.print();
 }
 
-TEST_CASE("Robin Hood handles collisions and preserves correctness", "[robin_collision]") {
+TEST_CASE("Robin Hood handles collisions and preserves correctness", "[robin][robin_collision]") {
     Robin_Hood<int, std::vector<size_t>> table(5);
     auto& ht = table.get_table();
 
