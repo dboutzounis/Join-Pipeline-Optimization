@@ -185,7 +185,7 @@ T& Robin_Hood<Key, T>::find(const Key& key) {
         auto& value = entry.first.second;
         target_tsl = entry.second;
 
-        if (entry.second != -1 && target_key == key) return value; 
+        if (entry.second != -1 && target_key == key) return value;
         index = (index + 1) % hash_table.size();
 
     } while (source_tsl++ <= target_tsl);
@@ -199,64 +199,67 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
         Key key;
         T value;
         bool occupied;
-        std::vector<uint8_t> bitmap;
+        uint64_t bitmap;
 
-        Bucket() : occupied(false) {}
-
-        Bucket(size_t bitmap_size) : occupied(false), bitmap(bitmap_size, 0) {}
+        Bucket() : occupied(false), bitmap(0) {}
     };
 
     std::vector<Bucket> hash_table;
-    size_t size, H, active, bitmap_size;
+    size_t size, H, mask;
 
-    inline void set_bit(std::vector<uint8_t>& bitmap, size_t i) { bitmap[i >> 3] |= static_cast<uint8_t>(1u << (i & 7)); }
+    inline void set_bit(uint64_t& bitmap, size_t i) { bitmap |= (1ull << i); }
 
-    inline void clear_bit(std::vector<uint8_t>& bitmap, size_t i) { bitmap[i >> 3] &= static_cast<uint8_t>(~(1u << (i & 7))); }
+    inline void clear_bit(uint64_t& bitmap, size_t i) { bitmap &= ~(1ull << i); }
 
-    inline bool check_bit(std::vector<uint8_t>& bitmap, size_t i) const { return (bitmap[i >> 3] & static_cast<uint8_t>(1u << (i & 7))) != 0; }
+    inline bool check_bit(const uint64_t& bitmap, size_t i) const { return (bitmap & (1ull << i)) != 0; }
 
-    inline size_t count_bits(std::vector<uint8_t>& bitmap) const {
-        size_t count = 0;
-        for (size_t i = 0; i < H; i++) count += check_bit(bitmap, i);
-        return count;
-    }
+    inline int count_ones(const uint64_t& bitmap) const { return __builtin_popcountll(bitmap); }
+
+    inline int count_trail_zeros(const uint64_t& bitmap) const { return __builtin_ctzll(bitmap); }
 
     void rehash() {
         std::vector<Bucket> old_hash_table = std::move(hash_table);
 
         size *= 2;
+        mask = size - 1;
         hash_table.clear();
-        hash_table.assign(size, Bucket(bitmap_size));
+        hash_table.assign(size, Bucket());
 
         for (auto& bucket : old_hash_table)
-            if (bucket.occupied) emplace(bucket.key, std::move(bucket.value));
+            if (bucket.occupied) emplace(std::move(bucket.key), std::move(bucket.value));
     }
 
     void move_payload(size_t dst, size_t src) {
-        auto& d = hash_table[dst];
-        auto& s = hash_table[src];
+        std::swap(hash_table[dst].key, hash_table[src].key);
+        std::swap(hash_table[dst].value, hash_table[src].value);
 
-        d.key = std::move(s.key);
-        d.value = std::move(s.value);
-        d.occupied = true;
-        s.occupied = false;
+        hash_table[dst].occupied = true;
+        hash_table[src].occupied = false;
     }
 
    public:
-    Hopscotch(size_t H = 8, size_t size = 512) : H(H), size(size), active(0) {
-        bitmap_size = (H + (8 * sizeof(uint8_t) - 1)) / (8 * sizeof(uint8_t));
-        hash_table.assign(size, Bucket(bitmap_size));
+    Hopscotch(size_t H = 8, size_t size = 512) {
+        this->H = (H <= 64) ? H : 64;
+        this->size = 1;
+        while (this->size < size) this->size <<= 1;
+        mask = this->size - 1;
+        hash_table.assign(this->size, Bucket());
     }
 
-    size_t hash(const Key& k) const { return std::hash<Key>{}(k) % size; }
+    inline size_t hash(const Key& k) const { return std::hash<Key>{}(k)&mask; }
 
     std::vector<Bucket>& get_hashtable() { return hash_table; }
 
     T& find(const Key& key) override {
         size_t index = hash(key);
+        uint64_t bitmap = hash_table[index].bitmap;
 
-        for (size_t j = index; j < index + H; j++)
-            if (hash_table[j % size].occupied && hash_table[j % size].key == key) return hash_table[j % size].value;
+        while (bitmap) {
+            int offset = count_trail_zeros(bitmap);
+            size_t pos = (index + offset) & mask;
+            if (hash_table[pos].occupied && hash_table[pos].key == key) return hash_table[pos].value;
+            bitmap &= (bitmap - 1);
+        }
 
         static T dummy{};
         return dummy;
@@ -265,34 +268,34 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
     void emplace(const Key& key, const T& value) override {
         size_t i = hash(key);
 
-        if (count_bits(hash_table[i].bitmap) == H) {
+        if (count_ones(hash_table[i].bitmap) == H) {
             rehash();
-            emplace(key, std::move(value));
+            emplace(std::move(key), std::move(value));
             return;
         }
 
         size_t j = i;
-        while (j < i + size && hash_table[j % size].occupied) j++;
+        while (j < i + size && hash_table[j & mask].occupied) j++;
 
         if (j == i + size) {
             rehash();
-            emplace(key, std::move(value));
+            emplace(std::move(key), std::move(value));
             return;
         }
 
-        j = j % size;
+        j = j & mask;
 
-        while ((j + size - i) % size >= H) {
+        while (((j + size - i) & mask) >= H) {
             bool flag = false;
             for (size_t p = H - 1; p > 0; p--) {
-                size_t y = (j + size - p) % size;
+                size_t y = (j + size - p) & mask;
                 auto& bucket = hash_table[y];
                 if (!bucket.occupied) continue;
                 size_t k = hash(bucket.key);
-                if ((j + size - k) % size < H) {
+                if (((j + size - k) & mask) < H) {
                     move_payload(j, y);
-                    clear_bit(hash_table[k].bitmap, (y + size - k) % size);
-                    set_bit(hash_table[k].bitmap, (j + size - k) % size);
+                    clear_bit(hash_table[k].bitmap, (y + size - k) & mask);
+                    set_bit(hash_table[k].bitmap, (j + size - k) & mask);
                     j = y;
                     flag = true;
                     break;
@@ -300,16 +303,15 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
             }
             if (!flag) {
                 rehash();
-                emplace(key, std::move(value));
+                emplace(std::move(key), std::move(value));
                 return;
             }
         }
 
         hash_table[j].key = key;
-        hash_table[j].value = std::move(value);
+        hash_table[j].value = value;
         hash_table[j].occupied = true;
-        set_bit(hash_table[i].bitmap, (j + size - i) % size);
-        active++;
+        set_bit(hash_table[i].bitmap, (j + size - i) & mask);
     }
 
     void print() const {

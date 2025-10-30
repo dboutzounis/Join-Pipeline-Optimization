@@ -529,7 +529,6 @@ TEST_CASE("Robin Hood manual insertion and find verification", "[robin][robin_fi
         auto& result = table.find(999);
         REQUIRE(result.size() == 0);
     }
-
 }
 TEST_CASE("Robin Hood emplace basic behavior", "[robin][robin_emplace]") {
     SECTION("Insert single key-value pair") {
@@ -571,7 +570,7 @@ TEST_CASE("Robin Hood rehash basic growth and key preservation", "[robin][robin_
 
     std::vector<int> inserted_keys;
 
-    //pushing to the limit.
+    // pushing to the limit.
     for (int i = 1; i <= 10000; i += 2) {
         inserted_keys.push_back(i);
         table.emplace(i, std::vector<int>{i});
@@ -646,13 +645,14 @@ TEST_CASE("Hopscotch manual insertion and find function", "[Hopscotch_find]") {
     hash_table[idx1].key = key1;
     hash_table[idx1].value = val1;
     hash_table[idx1].occupied = true;
+    hash_table[idx1].bitmap |= (1ull << 0);
 
     size_t idx2 = (idx1 + 1) % 8;
     hash_table[idx2].key = key2;
     hash_table[idx2].value = val2;
     hash_table[idx2].occupied = true;
 
-    hash_table[idx1].bitmap[1 >> 3] |= static_cast<uint8_t>(1u << (1 & 7));
+    hash_table[idx1].bitmap |= (1ull << 1);
 
     SECTION("Find key that sits at base hash position") {
         auto& found1 = hop.find(key1);
