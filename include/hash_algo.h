@@ -69,7 +69,6 @@ class Robin_Hood : public Hash_Algorithm<Key, T> {
     void print() const;
 };
 
-// Hash function for indices
 template <typename T>
 size_t hash_index(const T& value, size_t vector_size) {
     return std::hash<T>{}(value) % vector_size;
@@ -345,99 +344,90 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
 
         Bucket() : occupied(false) {}
     };
-    size_t *size, dim, *active, total_active;
-    std::vector<std::vector<Bucket>> hash_table;
-    std::vector<std::function<size_t(const Key&)>> hash_functions;
+    size_t size, mask, total_active;
+    std::vector<Bucket> hash_table;
 
-    size_t hash_with_seed(const Key& key, size_t seed, size_t i) const { return (std::hash<Key>{}(key) ^ (seed * 0x9e3779b97f4a7c15ULL)) & (size[i] - 1); }
+    inline Bucket& get_bucket(size_t table_idx, size_t pos) { return hash_table[table_idx * size + pos]; }
 
-    void rehash(size_t index) {
-        std::vector<Bucket> old_hash_table = std::move(hash_table[index]);
+    void rehash() {
+        std::vector<Bucket> old_hash_table = std::move(hash_table);
 
-        size[index] *= 2;
-        hash_table[index].clear();
-        hash_table[index].assign(size[index], Bucket());
-        active[index] = 0;
+        size *= 2;
+        mask = size - 1;
+        hash_table.clear();
+        hash_table.assign(2 * size, Bucket());
+        total_active = 0;
 
         for (auto& bucket : old_hash_table)
             if (bucket.occupied) emplace(std::move(bucket.key), std::move(bucket.value));
     }
 
    public:
-    Cuckoo(size_t dim = 2, size_t size = 512)
-        : dim(dim), size(new size_t[dim]), active(new size_t[dim]), total_active(0), hash_table(dim, std::vector<Bucket>(size)) {
-        for (int i = 0; i < dim; i++) {
-            this->size[i] = 1;
-            while (this->size[i] < size) this->size[i] <<= 1;
-            this->active[i] = 0;
-            hash_functions.push_back([this, i](const Key& key) { return hash_with_seed(key, i + 1, i); });
-        }
+    Cuckoo(size_t size = 512) {
+        this->size = 1;
+        while (this->size < size) this->size <<= 1;
+        mask = this->size - 1;
+        total_active = 0;
+        hash_table.assign(2 * size, Bucket());
     }
 
-    ~Cuckoo() {
-        delete[] size;
-        delete[] active;
-    }
+    inline size_t hash(const Key& key) const { return std::hash<Key>{}(key); }
 
-    std::vector<std::function<size_t(const Key&)>> get_hash_functions() { return hash_functions; }
-
-    std::vector<std::vector<Bucket>>& get_hashtable() { return hash_table; }
+    std::vector<Bucket>& get_hashtable() { return hash_table; }
 
     T& find(const Key& key) override {
-        for (size_t i = 0; i < dim; i++) {
-            size_t index = hash_functions[i](key);
-            auto& bucket = hash_table[i][index];
-            if (bucket.occupied && bucket.key == key) return bucket.value;
-        }
+        size_t h = hash(key);
+        size_t idx1 = h & mask;
+        auto& bucket1 = get_bucket(0, idx1);
+        if (bucket1.occupied && bucket1.key == key) return bucket1.value;
+
+        size_t idx2 = (h ^ 0x9e3779b97f4a7c15ULL) & mask;
+        auto& bucket2 = get_bucket(1, idx2);
+        if (bucket2.occupied && bucket2.key == key) return bucket2.value;
+
         static T dummy{};
         return dummy;
     }
 
     void emplace(const Key& key, const T& value) override {
+        if (total_active >= 2 * size * 0.7) rehash();
+
         Key curkey = key;
         T curval = value;
-        size_t table_idx = 0;
-        size_t swap_count = 0;
-        size_t max_swap = total_active;
-        while (swap_count <= max_swap) {
-            size_t index = hash_functions[table_idx](curkey);
+        size_t table_idx = 0, swap_count = 0, max_swap = total_active;
 
-            if (!hash_table[table_idx][index].occupied) {
-                hash_table[table_idx][index].key = curkey;
-                hash_table[table_idx][index].value = curval;
-                hash_table[table_idx][index].occupied = true;
-                active[table_idx]++;
+        while (swap_count <= max_swap) {
+            size_t idx, h = hash(curkey);
+            if (table_idx == 0)
+                idx = h & mask;
+            else
+                idx = (h ^ 0x9e3779b97f4a7c15ULL) & mask;
+
+            auto& bucket = get_bucket(table_idx, idx);
+
+            if (!bucket.occupied) {
+                bucket.key = std::move(curkey);
+                bucket.value = std::move(curval);
+                bucket.occupied = true;
                 total_active++;
-                if (static_cast<double>(active[table_idx]) / size[table_idx] > 0.5) rehash(table_idx);
                 return;
             }
 
-            std::swap(curkey, hash_table[table_idx][index].key);
-            std::swap(curval, hash_table[table_idx][index].value);
-
-            table_idx = (table_idx + 1) & (dim - 1);
+            std::swap(curkey, bucket.key);
+            std::swap(curval, bucket.value);
+            table_idx = (table_idx + 1) & 1u;
             swap_count++;
         }
 
-        double max_load = static_cast<double>(active[0]) / size[0];
-        size_t max_load_idx = 0;
-        for (size_t i = 1; i < dim; i++) {
-            double load = static_cast<double>(active[i]) / size[i];
-            if (load > max_load) {
-                max_load = load;
-                max_load_idx = i;
-            }
-        }
-        rehash(max_load_idx);
+        rehash();
         emplace(std::move(curkey), std::move(curval));
     }
 
     void print() const override {
-        std::cout << "{\n";
-        for (size_t t = 0; t < dim; t++) {
-            std::cout << " Table " << t << " (size=" << size[t] << ", active=" << active[t] << "):\n";
-            for (size_t i = 0; i < size[t]; i++) {
-                const auto& bucket = hash_table[t][i];
+        for (size_t t = 0; t < 2; t++) {
+            std::cout << "Table " << t << ":\n";
+            for (size_t i = 0; i < size; i++) {
+                const auto& bucket = hash_table[t * size + i];
                 if (!bucket.occupied) continue;
 
                 std::cout << "  [" << i << "] " << bucket.key << " : ";
@@ -455,6 +445,5 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
             }
             std::cout << "\n";
         }
-        std::cout << "}\n";
     }
 };

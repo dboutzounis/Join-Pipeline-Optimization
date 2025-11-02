@@ -631,7 +631,7 @@ TEST_CASE("Robin Hood handles collisions and preserves correctness", "[robin][ro
     table.print();
 }
 
-TEST_CASE("Hopscotch manual insertion and find function", "[Hopscotch_find]") {
+TEST_CASE("Hopscotch manual insertion and find function", "[hopscotch][hopscotch_find]") {
     Hopscotch<int, std::vector<size_t>> hop(4, 8);
 
     auto& hash_table = hop.get_hashtable();
@@ -674,7 +674,7 @@ TEST_CASE("Hopscotch manual insertion and find function", "[Hopscotch_find]") {
     }
 }
 
-TEST_CASE("Hopscotch emplace basic behavior", "[Hopscotch_emplace]") {
+TEST_CASE("Hopscotch emplace basic behavior", "[hopscotch][hopscotch_emplace]") {
     SECTION("Insert single key-value pair") {
         Hopscotch<int, std::vector<size_t>> hop(4, 8);
         hop.emplace(1, {10, 20});
@@ -708,7 +708,7 @@ TEST_CASE("Hopscotch emplace basic behavior", "[Hopscotch_emplace]") {
     }
 }
 
-TEST_CASE("Hopscotch emplace with collisions", "[Hopscotch_emplace_collision]") {
+TEST_CASE("Hopscotch emplace with collisions", "[hopscotch][hopscotch_emplace_collision]") {
     Hopscotch<int, std::vector<size_t>> hop(4, 8);
 
     int k1 = 5;
@@ -741,7 +741,7 @@ TEST_CASE("Hopscotch emplace with collisions", "[Hopscotch_emplace_collision]") 
     REQUIRE(hop.find(k5)[0] == 5);
 }
 
-TEST_CASE("Hopscotch rehash test 1", "[Hopscotch_rehash_1]") {
+TEST_CASE("Hopscotch rehash test 1", "[hopscotch][hopscotch_rehash_1]") {
     Hopscotch<int, std::vector<size_t>> hop(2, 2);
     auto initial_hash_table = hop.get_hashtable();
     size_t initial_size = initial_hash_table.size();
@@ -776,7 +776,7 @@ TEST_CASE("Hopscotch rehash test 1", "[Hopscotch_rehash_1]") {
     REQUIRE(new_size % initial_size == 0);
 }
 
-TEST_CASE("Hopscotch rehash test 2", "[Hopscotch_rehash_2]") {
+TEST_CASE("Hopscotch rehash test 2", "[hopscotch][hopscotch_rehash_2]") {
     Hopscotch<int, std::vector<size_t>> hop(2, 2);
     auto initial_hash_table = hop.get_hashtable();
     size_t initial_size = initial_hash_table.size();
@@ -811,7 +811,7 @@ TEST_CASE("Hopscotch rehash test 2", "[Hopscotch_rehash_2]") {
     REQUIRE(new_size % initial_size == 0);
 }
 
-TEST_CASE("Hopscotch rehash test 3", "[Hopscotch_rehash_3]") {
+TEST_CASE("Hopscotch rehash test 3", "[hopscotch][hopscotch_rehash_3]") {
     Hopscotch<int, std::vector<size_t>> hop(2, 4);
     auto initial_hash_table = hop.get_hashtable();
     size_t initial_size = initial_hash_table.size();
@@ -852,10 +852,9 @@ TEST_CASE("Hopscotch rehash test 3", "[Hopscotch_rehash_3]") {
     REQUIRE(new_size % initial_size == 0);
 }
 
-TEST_CASE("Cuckoo manual insertion and find function", "[Cuckoo_find]") {
-    Cuckoo<int, std::vector<size_t>> cuckoo(2, 8);
+TEST_CASE("Cuckoo manual insertion and find function", "[cuckoo][cuckoo_find]") {
+    Cuckoo<int, std::vector<size_t>> cuckoo(8);
 
-    auto hash_functions = cuckoo.get_hash_functions();
     auto& hash_table = cuckoo.get_hashtable();
 
     SECTION("Manually insert items into specific hash positions") {
@@ -864,16 +863,16 @@ TEST_CASE("Cuckoo manual insertion and find function", "[Cuckoo_find]") {
         std::vector<size_t> val1 = {1, 2, 3};
         std::vector<size_t> val2 = {9, 8};
 
-        size_t idx1_t0 = hash_functions[0](key1);
-        size_t idx2_t1 = hash_functions[1](key2);
+        size_t idx1_t0 = cuckoo.hash(key1) % 8;
+        size_t idx2_t1 = (cuckoo.hash(key2) ^ 0x9e3779b97f4a7c15ULL) % 8;
 
-        hash_table[0][idx1_t0].key = key1;
-        hash_table[0][idx1_t0].value = val1;
-        hash_table[0][idx1_t0].occupied = true;
+        hash_table[idx1_t0].key = key1;
+        hash_table[idx1_t0].value = val1;
+        hash_table[idx1_t0].occupied = true;
 
-        hash_table[1][idx2_t1].key = key2;
-        hash_table[1][idx2_t1].value = val2;
-        hash_table[1][idx2_t1].occupied = true;
+        hash_table[8 + idx2_t1].key = key2;
+        hash_table[8 + idx2_t1].value = val2;
+        hash_table[8 + idx2_t1].occupied = true;
 
         auto& found1 = cuckoo.find(key1);
         REQUIRE(found1.size() == val1.size());
@@ -887,7 +886,7 @@ TEST_CASE("Cuckoo manual insertion and find function", "[Cuckoo_find]") {
     }
 }
 
-TEST_CASE("Cuckoo emplace basic behavior", "[Cuckoo_emplace]") {
+TEST_CASE("Cuckoo emplace basic behavior", "[cuckoo][cuckoo_emplace]") {
     SECTION("Insert single key-value pair") {
         Cuckoo<int, std::vector<size_t>> hash_table;
         hash_table.emplace(1, {10, 20});
@@ -921,15 +920,12 @@ TEST_CASE("Cuckoo emplace basic behavior", "[Cuckoo_emplace]") {
     }
 }
 
-TEST_CASE("Cuckoo rehash basic growth", "[Cuckoo_rehash]") {
-    Cuckoo<int, std::vector<size_t>> table(2, 2);
+TEST_CASE("Cuckoo rehash basic growth", "[cuckoo][cuckoo_rehash]") {
+    Cuckoo<int, std::vector<size_t>> table(2);
 
     auto& initial_hash_table = table.get_hashtable();
-    size_t initial_size_0 = initial_hash_table[0].size();
-    size_t initial_size_1 = initial_hash_table[1].size();
-
-    REQUIRE(initial_size_0 == 2);
-    REQUIRE(initial_size_1 == 2);
+    size_t initial_size_0 = initial_hash_table.size() / 2;
+    size_t initial_size_1 = initial_hash_table.size() / 2;
 
     for (size_t i = 1; i < 100; i *= 2) {
         table.emplace(i, std::vector<size_t>{i});
@@ -940,8 +936,8 @@ TEST_CASE("Cuckoo rehash basic growth", "[Cuckoo_rehash]") {
     }
 
     auto& grown_table = table.get_hashtable();
-    size_t new_size_0 = grown_table[0].size();
-    size_t new_size_1 = grown_table[1].size();
+    size_t new_size_0 = grown_table.size() / 2;
+    size_t new_size_1 = grown_table.size() / 2;
 
     REQUIRE((new_size_0 > initial_size_0 || new_size_1 > initial_size_1));
 
@@ -954,24 +950,23 @@ TEST_CASE("Cuckoo rehash basic growth", "[Cuckoo_rehash]") {
     REQUIRE((new_size_0 % initial_size_0 == 0 || new_size_1 % initial_size_1 == 0));
 }
 
-TEST_CASE("Cuckoo rehash timeout detection (non-blocking)", "[Cuckoo_circle_safe_detection]") {
-    Cuckoo<int, std::vector<size_t>> cuckoo(2, 4);
+TEST_CASE("Cuckoo rehash timeout detection (non-blocking)", "[cuckoo][cuckoo_circle_safe_detection]") {
+    Cuckoo<int, std::vector<size_t>> cuckoo(4);
 
-    auto hash_functions = cuckoo.get_hash_functions();
     auto& hash_table = cuckoo.get_hashtable();
 
     int key = 42;
     std::vector<size_t> val1 = {1, 2, 3};
     std::vector<size_t> val2 = {9, 8};
 
-    size_t idx0 = hash_functions[0](key);
-    size_t idx1 = hash_functions[1](key);
-    hash_table[0][idx0].key = key;
-    hash_table[0][idx0].value = val1;
-    hash_table[0][idx0].occupied = true;
-    hash_table[1][idx1].key = key;
-    hash_table[1][idx1].value = val2;
-    hash_table[1][idx1].occupied = true;
+    size_t idx0 = cuckoo.hash(key) % 4;
+    size_t idx1 = (cuckoo.hash(key) ^ 0x9e3779b97f4a7c15ULL) % 4;
+    hash_table[idx0].key = key;
+    hash_table[idx0].value = val1;
+    hash_table[idx0].occupied = true;
+    hash_table[4 + idx1].key = key;
+    hash_table[4 + idx1].value = val2;
+    hash_table[4 + idx1].occupied = true;
 
     std::atomic<bool> finished = false;
 
