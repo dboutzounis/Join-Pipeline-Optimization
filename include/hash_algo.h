@@ -349,7 +349,7 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
     std::vector<std::vector<Bucket>> hash_table;
     std::vector<std::function<size_t(const Key&)>> hash_functions;
 
-    size_t hash_with_seed(const Key& key, size_t seed, size_t i) const { return (std::hash<Key>{}(key) ^ (seed * 0x9e3779b97f4a7c15ULL)) % size[i]; }
+    size_t hash_with_seed(const Key& key, size_t seed, size_t i) const { return (std::hash<Key>{}(key) ^ (seed * 0x9e3779b97f4a7c15ULL)) & (size[i] - 1); }
 
     void rehash(size_t index) {
         std::vector<Bucket> old_hash_table = std::move(hash_table[index]);
@@ -360,14 +360,15 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
         active[index] = 0;
 
         for (auto& bucket : old_hash_table)
-            if (bucket.occupied) emplace(bucket.key, std::move(bucket.value));
+            if (bucket.occupied) emplace(std::move(bucket.key), std::move(bucket.value));
     }
 
    public:
     Cuckoo(size_t dim = 2, size_t size = 512)
         : dim(dim), size(new size_t[dim]), active(new size_t[dim]), total_active(0), hash_table(dim, std::vector<Bucket>(size)) {
         for (int i = 0; i < dim; i++) {
-            this->size[i] = size;
+            this->size[i] = 1;
+            while (this->size[i] < size) this->size[i] <<= 1;
             this->active[i] = 0;
             hash_functions.push_back([this, i](const Key& key) { return hash_with_seed(key, i + 1, i); });
         }
@@ -381,6 +382,16 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
     std::vector<std::function<size_t(const Key&)>> get_hash_functions() { return hash_functions; }
 
     std::vector<std::vector<Bucket>>& get_hashtable() { return hash_table; }
+
+    T& find(const Key& key) override {
+        for (size_t i = 0; i < dim; i++) {
+            size_t index = hash_functions[i](key);
+            auto& bucket = hash_table[i][index];
+            if (bucket.occupied && bucket.key == key) return bucket.value;
+        }
+        static T dummy{};
+        return dummy;
+    }
 
     void emplace(const Key& key, const T& value) override {
         Key curkey = key;
@@ -404,22 +415,21 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
             std::swap(curkey, hash_table[table_idx][index].key);
             std::swap(curval, hash_table[table_idx][index].value);
 
-            table_idx = (table_idx + 1) % dim;
+            table_idx = (table_idx + 1) & (dim - 1);
             swap_count++;
         }
 
-        rehash(0);
-        emplace(curkey, curval);
-    }
-
-    T& find(const Key& key) override {
-        for (size_t i = 0; i < dim; i++) {
-            size_t index = hash_functions[i](key);
-            auto& bucket = hash_table[i][index];
-            if (bucket.occupied && bucket.key == key) return bucket.value;
+        double max_load = static_cast<double>(active[0]) / size[0];
+        size_t max_load_idx = 0;
+        for (size_t i = 1; i < dim; i++) {
+            double load = static_cast<double>(active[i]) / size[i];
+            if (load > max_load) {
+                max_load = load;
+                max_load_idx = i;
+            }
         }
-        static T dummy{};
-        return dummy;
+        rehash(max_load_idx);
+        emplace(std::move(curkey), std::move(curval));
     }
 
     void print() const override {
