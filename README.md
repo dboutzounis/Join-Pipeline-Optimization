@@ -1,181 +1,75 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/gjaw_qSU)
-# SIGMOD Contest 2025
+# Join Pipeline Optimization
 
-## Task
+## First Assignment: Hash Algorithms
 
-Given the joining pipeline and the pre-filtered input data, your task is to implement an efficient joining algorithm to accelerate the execution time of the joining pipeline. Specifically, you need to implement the following function in `src/execute.cpp`:
+### Overview
 
-```C++
-ColumnarTable execute(const Plan& plan, void* context);
-```
+This assignment focuses on the implementation and comparison of three advanced open-addressing hashing algorithms **Robin Hood**, **Hopscotch**, and **Cuckoo Hashing** commonly used in high-performance data structures and database join operations. The goal of the project is to design, implement, and evaluate these algorithms under a unified interface that allows consistent insertion, search, and rehashing operations while maintaining efficient memory usage and constant-time average complexity. Each algorithm is templated in C++ to support generic key value types and is tested through a unit testing framework based on Catch2. The performance of each algorithm will be compared based on the given SQL queries.
 
-Optionally, you can implement these two functions as well to prepare any global context (e.g., thread pool) to accelerate the execution.
+### Robin Hood
 
-```C++
-void* build_context();
-void destroy_context(void*);
-```
+### Hopscotch
 
-### Input format
+The Hopscotch Hashing algorithm is a highly efficient hash table scheme that provides O(1) average lookup time while maintaining strong locality of reference for cache-friendly performance.
 
-The input plan in the above function is defined as the following struct.
+The Hopscotch class is organized around an internal Bucket struct, which stores a single key value pair, an occupancy flag to check whether a bucket is empty, and a 64-bit bitmap representing the neighborhood of displaced elements. The hash table itself is implemented as a vector containing Buckets, ensuring fast random access and cache-friendly memory layout. Each Bucket acts as both a storage slot and a small metadata node, allowing efficient management of collisions and element movement within the local neighborhood. This design keeps the implementation compact, minimizes pointer overhead, and aligns closely with the original Hopscotch Hashing algorithm's focus on locality and bitwise efficiency.
 
-```C++
-struct ScanNode {
-    size_t base_table_id;
-};
+#### Implementation Details
 
-struct JoinNode {
-    bool   build_left;
-    size_t left;
-    size_t right;
-    size_t left_attr;
-    size_t right_attr;
-};
+The Hopscotch class is built around an internal Bucket struct that holds a key, value, occupancy flag, and a 64-bit bitmap. The hash table is a vector of buckets, using power-of-two sizing so that index calculations use fast bitmasking (index & mask).
 
-struct PlanNode {
-    std::variant<ScanNode, JoinNode>          data;
-    std::vector<std::tuple<size_t, DataType>> output_attrs;
-};
+- **Insertion (emplace):**
 
-struct Plan {
-    std::vector<PlanNode>      nodes;
-    std::vector<ColumnarTable> inputs;
-    size_t root;
-}
-```
+  When inserting, the algorithm computes the key's home index `i` and checks whether its neighborhood (of size `H`) is full using the bucket's bitmap. If full, the table is rehashed (doubled in size). Next, it scans linearly for the nearest empty slot `j`. If `j` lies outside the allowed neighborhood, the algorithm repeatedly hops nearby elements forward (using `move_payload`) to bring the empty slot closer to `i`. This process updates the affected bitmaps with `set_bit` and `clear_bit`, maintaining accurate neighborhood information. Finally, the new element is placed in position `j`, and the home bucket's bitmap marks its offset.
 
-**Scan**:
-- The `base_table_id` member refers to which input table in the `inputs` member of a plan is used by the Scan node.
-- Each item in the `output_attrs` indicates which column in the base table should be output and what type it is.
+- **Lookup (find):**
 
-**Join**:
-- The `build_left` member refers to which side the hash table should be built on, where `true` indicates building the hash table on the left child, and `false` indicates the opposite.
-- The `left` and `right` members are the indexes of the left and right child of the Join node in the `nodes` member of a plan, respectively.
-- The `left_attr` and `right_attr` members are the join condition of Join node. Supposing that there are two records, `left_record` and `right_record`, from the intermediate results of the left and right child, respectively. The members indicate that the two records should be joined when `left_record[left_attr] == right_record[right_attr]`.
-- Each item in the `output_attrs` indicates which column in the result of children should be output and what type it is. Supposing that the left child has $n_l$ columns and the right child has $n_r$ columns, the value of the index $i \in \{0, \dots, n_l + n_r - 1\}$, where the ranges $\{0, \dots, n_l - 1\}$ and $\{n_l, \dots, n_l + n_r - 1\}$ indicate the output column is from left and right child respectively.
+  For lookups, the algorithm reads the home bucket's bitmap and iterates only over bits that are set. Each bit represents a valid offset to a bucket that might contain the key. The loop uses fast bit operations (`count_trail_zeros`, `bitmap &= bitmap - 1`) to test those positions efficiently. This bit-guided probing avoids unnecessary scans, ensuring O(1) average search time and excellent cache locality.
 
-**Root**: The `root` member of a plan indicates which node is the root node of the execution plan tree.
+- **Design Highlights:**
 
-### Data format
+  - Fast index arithmetic: `mask = size - 1` replaces modulo.
+  - Efficient bit operations: built-in intrinsics manage hop bitmaps.
+  - Cache-friendly layout: contiguous storage in vector.
 
-The input and output data both follow a simple columnar data format.
+### Cuckoo Hashing
 
-```C++
-enum class DataType {
-    INT32,       // 4-byte integer
-    INT64,       // 8-byte integer
-    FP64,        // 8-byte floating point
-    VARCHAR,     // string of arbitary length
-};
+The Cuckoo Hashing algorithm is a high-performance, open-addressing hash scheme that guarantees O(1) worst-case lookup time. It achieves this by utilizing two separate hash tables and two independent hash functions. The key principle is that every element must reside in one of its two possible locations.
 
-constexpr size_t PAGE_SIZE = 8192;
+The Cuckoo class is organized around a simple Bucket struct that stores the element's key, value, and a boolean occupied flag. The two conceptual tables, T1 and T2, are physically stored within a single contiguous vector of buckets, ensuring optimal memory access and cache locality.
 
-struct alignas(8) Page {
-    std::byte data[PAGE_SIZE];
-};
+#### Implementation Details
 
-struct Column {
-    DataType           type;
-    std::vector<Page*> pages;
-};
+The Cuckoo class uses a single vector of buckets (hash_table) to represent the two tables (T1 and T2). Table indexing is handled via bitwise operations: `size` is maintained as a power of two, and `mask` (`size - 1`) enables fast modulo operations for index calculation.
 
-struct ColumnarTable {
-    size_t              num_rows;
-    std::vector<Column> columns;
-};
-```
+- **Hash Functions:**
 
-A `ColumnarTable` first stores how many rows the table has in the `num_rows` member, then stores each column seperately as a `Column`. Each `Column` has a type and stores the items of the column into several pages. Each page is of 8192 bytes. In each page:
+  - Table 0 (T1): The index is calculated as the standard `std::hash<Key>{}(key)` masked by `mask`.
 
-- The first 2 bytes are a `uint16_t` which is the number of rows $n_r$ in the page.
-- The following 2 bytes are a `uint16_t` which is the number of non-`NULL` values $n_v$ in the page.
-- The first $n_r$ bits in the last $\left\lfloor\frac{(n_r + 7)}{8}\right\rfloor$ bytes is a bitmap indicating whether the corresponding row has value or is `NULL`.
+  - Table 1 (T2): The index uses the standard hash value XORed with a large, fixed constant `(0x9e3779b97f4a7c15ULL)`, then masked. The XOR operation with this specific constant (derived from the golden ratio) acts as a powerful secondary scramble, ensuring that keys that collide in T1 are highly unlikely to collide again in T2, which is crucial for Cuckoo Hashing's efficiency.
 
-**Fixed-length attribute**: There are $n_v$ contiguous values begins at the first aligned position. For example, in a `Page` of `INT32`, the first value is at `data + 4`. While in a `Page` of `INT64` and `FP64`, the first value is at `data + 8`.
+- **Insertion (emplace):**
 
-**Variable-length attribute**: There are $n_v$ contigous offsets (`uint16_t`) begins at `data + 4` in a `Page`, followed by the content of the varchars which begins at `char_begin = data + 4 + n_r * 2`. Each offset indicates the ending offset of the corresponding `VARCHAR` with respect to the `char_begin`.
+  The insertion follows the "cuckoo" eviction process:
 
-**Long string**: When the length of a string is longer than `PAGE_SIZE - 7`, it can not fit in a normal page. Special pages will be used to store such string. If $n_r$ `== 0xffff` or $n_r$ `== 0xfffe`, the `Page` is a special page for long string. `0xffff` means the page is the first page of a long string and `0xfffe` means the page is the following page of a long string. The following 2 bytes is a `uint16_t` indicating the number of chars in the page, beginning at `data + 4`.
+  1. The new element is initially placed in its T1 position.
+  2. If that position is occupied, the existing element is kicked out and moved to its alternate location in the other table.
+  3. This process continues, toggling between T1 and T2 for the evicted element, until an empty slot is found.
+  4. Cycle Detection: The implementation tracks the number of swaps against the total active elements. If the swap count exceeds this limit, a cycle is assumed, triggering an immediate `rehash()`.
 
-## Requirement
+- **Lookup (find):**
 
-- You can only modify the file `src/execute.cpp` in the project.
-- You must not use any third-party libraries. If you are using libraries for development (e.g., for logging), ensure to remove them before the final submission.
-- The joining pipeline (including order and build side) is optimized by PostgreSQL for `Hash Join` only. However, in the `execute` function, you are free to use other algorithms and change the pipeline, as long as the result is equivalent.
-- For any struct listed above, all of there members are public. You can manipulate them in free functions as desired as long as the original files are not changed and the manipulated objects can be destructed properly.
-- Your program will be evaluated on an unpublished benchmark sampled from the original JOB benchmark. You will not be able to access the test benchmark.
+  A lookup only requires checking the two possible locations for the key its position in T1 and its position in T2. This ensures that the lookup is extremely fast, achieving O(1) worst-case complexity when a key is present.
 
-## Quick start
+- **Rehashing (rehash):**
 
-> [!TIP]
-> Run all the following commands in the root directory of this project.
+  Rehashing involves doubling the table size and re-inserting all elements. It is triggered under two conditions:
 
-First, download the imdb dataset.
+  1.  The Load Factor exceeds 70%, to maintain a low collision probability.
+  2.  An Insertion Cycle is detected, which is necessary to resolve unresolvable key paths in the current table configuration.
 
-```bash
-./download_imdb.sh
-```
+### Authors
 
-Second, build the project.
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev
-cmake --build build -- -j $(nproc)
-```
-
-Third, prepare the DuckDB database for correctness checking.
-
-```bash
-./build/build_database imdb.db
-```
-
-Now, you can run the tests:
-```bash
-./build/run plans.json
-```
-> [!TIP]
-> If you want to use `Ninja Multi-Config` as the generator. The commands will look like:
-> 
->```bash
-> cmake -S . -B build -Wno-dev -G "Ninja Multi-Config"
-> cmake --build build --config Release -- -j $(nproc)
-> ./build/Release/build_database imdb.db
-> ./build/Release/run plans.json
-> ```
-
-# Cache
-## This section is only for UNIX users
-There are 2 new executables with this repository. They cache the join tables and
-result of each query and mmap them for faster loading times and getting rid of duckdb.
-
-To build the cache you need to run:
-```bash
-./build/build_cache plans.json
-```
-
-> [!TIP] 
-> If you are using `Linux x86_64` you can download our prebuilt cache with:
-> ```
-> wget http://share.uoa.gr/protected/all-download/sigmod25/sigmod25_cache_x86.tar.gz
-> ```
-> If you are using `macOS arm64` you can download our prebuilt cache with:
-> ```
-> wget http://share.uoa.gr/protected/all-download/sigmod25/sigmod25_cache_arm.tar.gz
-> ```
-> For all other systems you will need to build the cache on your own.
-
-After the cache is built you can run the queries using:
-```bash
-./build/fast plans.json
-```
-
-Also after you have built the cache you no longer need to build the `run` executable
-every time (which depends on duckdb and can be slow to compile). Just compile 
-the executable that uses the cache:
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev
-cmake --build build -- -j $(nproc) fast
-```
-
-Code is compiled with Clang 18.
+- Boutzounis Dimitrios - Nikolaos 1115202200112
+- Stephanou Iasonas 1115202200246
+- Stavrou Spyridon 1115202200172
