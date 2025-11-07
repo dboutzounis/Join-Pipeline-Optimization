@@ -52,13 +52,27 @@ class Base_Solution : public Hash_Algorithm<Key, T> {
 };
 template <typename Key, typename T>
 class Robin_Hood : public Hash_Algorithm<Key, T> {
-    std::vector<std::pair<std::pair<Key, T>, int>> hash_table;
-    int capacity, num_elements;
+   
+    int capacity, num_elements; 
+    struct Bucket {
+        Key key;
+        T value;
+        int tsl;
+
+        Bucket():tsl(-1){};
+        void assign(Key k,const T&v, int t) {
+            key = k;
+            value = v;
+            tsl = t;
+        }   
+    };    
+
+    std::vector<Bucket> hash_table;
 
    public:
-    Robin_Hood(size_t table_size = 512) : hash_table(table_size, {{}, -1}), capacity(table_size), num_elements(0) {}
+    Robin_Hood(size_t table_size = 512) : hash_table(table_size), capacity(table_size), num_elements(0) {}
 
-    std::vector<std::pair<std::pair<Key, T>, int>>& get_table();
+    std::vector<Bucket>& get_table();
 
     void emplace(const Key& key, const T& value) override;
 
@@ -71,16 +85,16 @@ class Robin_Hood : public Hash_Algorithm<Key, T> {
 
 template <typename T>
 size_t hash_index(const T& value, size_t vector_size) {
-    return std::hash<T>{}(value) % vector_size;
+    return std::hash<T>{}(value)&(vector_size -1);
 }
 
 template <typename Key, typename T>
 void Robin_Hood<Key, T>::print() const {
     for (size_t i = 0; i < hash_table.size(); ++i) {
         const auto& entry = hash_table[i];
-        const auto& key = entry.first.first;
-        const auto& value = entry.first.second;
-        int distance = entry.second;
+        const auto& key = entry.key;
+        const auto& value = entry.value;
+        int distance = entry.tsl;
 
         std::cout << "Index " << i << " : ";
 
@@ -93,82 +107,75 @@ void Robin_Hood<Key, T>::print() const {
             std::cout << std::endl;
         }
     }
-
     std::cout << "END OF PRINT \n";
 }
 
 template <typename Key, typename T>
-void Robin_Hood<Key, T>::rehash(size_t new_capacity) {
-    std::vector<std::pair<std::pair<Key, T>, int>> new_table(new_capacity, {{}, -1});
+void Robin_Hood<Key, T>::rehash(size_t new_capacity){
+    std::vector<Bucket> new_table(new_capacity);
 
     for (auto& entry : hash_table) {
-        if (entry.second != -1) {
-            auto& key = entry.first.first;
-            auto& value = entry.first.second;
+        if (entry.tsl != -1) {
+
+            auto key = entry.key;
+            auto value = entry.value;
+            int tsl = 0;
 
             size_t idx = hash_index(key, new_capacity);
-            int tsl = 0;
 
             while (true) {
                 auto& new_entry = new_table[idx];
-                auto& target_tsl = new_entry.second;
 
-                if (target_tsl == -1) {
-                    new_entry = {{key, value}, tsl};
+                if (new_entry.tsl == -1) {
+                    new_entry.assign(key, value, tsl);
                     break;
                 }
 
-                if (target_tsl < tsl) {
-                    std::swap(new_entry.first.first, key);
-                    std::swap(new_entry.first.second, value);
-                    std::swap(new_entry.second, tsl);
+                if (new_entry.tsl < tsl) {
+                    std::swap(key, new_entry.key);
+                    std::swap(value, new_entry.value);
+                    std::swap(tsl, new_entry.tsl);
                 }
 
-                tsl++;
-                idx = (idx + 1) % new_capacity;
+                ++tsl;
+                idx = (idx + 1) & (new_capacity - 1);
             }
         }
     }
 
     hash_table.swap(new_table);
-    capacity = hash_table.size();
+    capacity = new_capacity;
 }
 
 template <typename Key, typename T>
 void Robin_Hood<Key, T>::emplace(const Key& key, const T& value) {
+
     if ((num_elements + 1) > 0.5 * capacity) {
         rehash(capacity * 2);
     }
 
-    auto source_tsl = 0;
-    auto source_key = key;
-    auto source_value = value;
-    size_t idx = hash_index(key, hash_table.size());
+    Bucket source;
+    source.assign(key , value , 0);
+    size_t idx =  hash_index(key, hash_table.size());
 
     do {
         auto& entry = hash_table[idx];
-        auto& target_tsl = entry.second;
-        auto& target_key = entry.first.first;
-        auto& target_value = entry.first.second;
-
-        if (target_tsl == -1) {
-            entry = {{source_key, source_value}, source_tsl};
-            num_elements += 1;
+        if (entry.tsl == -1) {
+            entry = source;
+            num_elements++;
             return;
         }
-        if (target_tsl < source_tsl) {
-            std::swap(source_key, target_key);
-            std::swap(source_value, target_value);
-            std::swap(source_tsl, target_tsl);
-        }
-
-        source_tsl++;
-        idx = (idx + 1) % hash_table.size();
+        if (entry.tsl < source.tsl)
+            std::swap(entry, source);
+        
+        source.tsl++;
+        idx = (idx + 1) & (hash_table.size() -1);
     } while (true);
 }
 
 template <typename Key, typename T>
-std::vector<std::pair<std::pair<Key, T>, int>>& Robin_Hood<Key, T>::get_table() {
+std::vector<typename Robin_Hood<Key, T>::Bucket>&
+Robin_Hood<Key, T>::get_table() {
     return hash_table;
 }
 
@@ -180,12 +187,12 @@ T& Robin_Hood<Key, T>::find(const Key& key) {
 
     do {
         auto& entry = hash_table[index];
-        const auto& target_key = entry.first.first;
-        auto& value = entry.first.second;
-        target_tsl = entry.second;
+        const auto& target_key = entry.key;
+        auto& value = entry.value;
+        target_tsl = entry.tsl;
 
-        if (entry.second != -1 && target_key == key) return value;
-        index = (index + 1) % hash_table.size();
+        if (entry.tsl != -1 && target_key == key) return value; 
+        index = (index + 1) & (hash_table.size() -1);
 
     } while (source_tsl++ <= target_tsl);
     static T dummy{};

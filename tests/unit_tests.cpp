@@ -497,17 +497,21 @@ TEST_CASE("3-way join", "[join]") {
     REQUIRE(result_table.table() == ground_truth);
 }
 
+
 TEST_CASE("Robin Hood manual insertion and find verification", "[robin][robin_find]") {
-    Robin_Hood<int, std::vector<size_t>> table(5);
+    Robin_Hood<int,std::vector<int>> table(4);
     auto& ht = table.get_table();
 
     size_t idx1 = hash_index(1, ht.size());
-    size_t idx2 = hash_index(3, ht.size());
-    size_t idx3 = hash_index(7, ht.size());
+    size_t idx2 = hash_index(2, ht.size());
+    size_t idx3 = hash_index(3, ht.size());
 
-    ht[idx1] = {{1, {10, 20}}, 0};
-    ht[idx2] = {{3, {30}}, 0};
-    ht[idx3] = {{7, {99, 100, 101}}, 1};
+    
+
+    ht[idx1].assign (1, {10, 20}, 0);
+    ht[idx2].assign (2, {30}, 0);
+    ht[idx3].assign (3, {99, 100, 101}, 1);
+
 
     SECTION("Find existing keys manually placed") {
         auto& result1 = table.find(1);
@@ -515,24 +519,24 @@ TEST_CASE("Robin Hood manual insertion and find verification", "[robin][robin_fi
         REQUIRE(result1[0] == 10);
         REQUIRE(result1[1] == 20);
 
-        auto& result2 = table.find(3);
+        auto& result2 = table.find(2);
         REQUIRE(result2.size() == 1);
         REQUIRE(result2[0] == 30);
 
-        auto& result3 = table.find(7);
+        auto& result3 = table.find(3);
         REQUIRE(result3.size() == 3);
         REQUIRE(result3[2] == 101);
     }
 
     SECTION("Find missing key returns dummy") {
-        Robin_Hood<int, std::vector<size_t>> table(5);
+        Robin_Hood<int, std::vector<size_t>> table(4);
         auto& result = table.find(999);
         REQUIRE(result.size() == 0);
     }
 }
 TEST_CASE("Robin Hood emplace basic behavior", "[robin][robin_emplace]") {
     SECTION("Insert single key-value pair") {
-        Robin_Hood<int, std::vector<size_t>> hash_table(3);
+        Robin_Hood<int, std::vector<size_t>> hash_table(4);
         hash_table.emplace(1, {10, 20});
         auto& result = hash_table.find(1);
         REQUIRE(result.size() == 2);
@@ -541,7 +545,7 @@ TEST_CASE("Robin Hood emplace basic behavior", "[robin][robin_emplace]") {
     }
 
     SECTION("Insert multiple keys of char* type") {
-        Robin_Hood<const char*, std::vector<size_t>> hash_table(3);
+        Robin_Hood<const char*, std::vector<size_t>> hash_table(8);
 
         hash_table.emplace("iasonas", {22});
         hash_table.emplace("kostis", {33});
@@ -593,12 +597,12 @@ TEST_CASE("Robin Hood rehash basic growth and key preservation", "[robin][robin_
 }
 
 TEST_CASE("Robin Hood handles collisions and preserves correctness", "[robin][robin_collision]") {
-    Robin_Hood<int, std::vector<size_t>> table(5);
+    Robin_Hood<int, std::vector<size_t>> table(8);
     auto& ht = table.get_table();
 
-    int k1 = 5;
-    int k2 = 10;
-    int k3 = 15;
+    int k1 = 0;
+    int k2 = 8;
+    int k3 = 16;
 
     table.emplace(k1, {11});
     table.emplace(k2, {22});
@@ -618,10 +622,10 @@ TEST_CASE("Robin Hood handles collisions and preserves correctness", "[robin][ro
 
     bool found_k1 = false, found_k2 = false, found_k3 = false;
     for (auto& entry : ht) {
-        if (entry.second == -1) continue;
-        if (entry.first.first == k1) found_k1 = true;
-        if (entry.first.first == k2) found_k2 = true;
-        if (entry.first.first == k3) found_k3 = true;
+        if (entry.tsl == -1) continue;
+        if (entry.key == k1) found_k1 = true;
+        if (entry.key == k2) found_k2 = true;
+        if (entry.key == k3) found_k3 = true;
     }
     REQUIRE(found_k1);
     REQUIRE(found_k2);
