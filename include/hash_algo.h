@@ -11,14 +11,16 @@
 #include <unordered_map>
 #include <vector>
 
+// Abstract base interface for hash algorithms
 template <typename Key, typename T>
 class Hash_Algorithm {
    public:
-    virtual void emplace(const Key& key, const T& value) = 0;
-    virtual T& find(const Key& key) = 0;
-    virtual void print() const = 0;
+    virtual void emplace(const Key& key, const T& value) = 0;  // Insert key-value
+    virtual T& find(const Key& key) = 0;                       // Find value by key
+    virtual void print() const = 0;                            // Table display
 };
 
+// Base solution (std::unordered_map)
 template <typename Key, typename T>
 class Base_Solution : public Hash_Algorithm<Key, T> {
     std::unordered_map<Key, T> hash_table;
@@ -26,6 +28,7 @@ class Base_Solution : public Hash_Algorithm<Key, T> {
    public:
     void emplace(const Key& key, const T& value) override { hash_table.emplace(key, value); }
 
+    // Returns value or dummy if not found
     T& find(const Key& key) override {
         auto itr = hash_table.find(key);
 
@@ -37,6 +40,7 @@ class Base_Solution : public Hash_Algorithm<Key, T> {
         return itr->second;
     }
 
+    // Print key-value pairs
     void print() const {
         std::cout << "{\n";
         for (const auto& [key, vec] : hash_table) {
@@ -50,22 +54,25 @@ class Base_Solution : public Hash_Algorithm<Key, T> {
         std::cout << "}\n";
     }
 };
+
+// Robin Hood Hashing
 template <typename Key, typename T>
 class Robin_Hood : public Hash_Algorithm<Key, T> {
-   
-    int capacity, num_elements; 
+    int capacity, num_elements;
+
+    // Each bucket stores key, value, and probe distance (tsl)
     struct Bucket {
         Key key;
         T value;
         int tsl;
 
-        Bucket():tsl(-1){};
-        void assign(Key k,const T&v, int t) {
+        Bucket() : tsl(-1) {};
+        void assign(Key k, const T& v, int t) {
             key = k;
             value = v;
             tsl = t;
-        }   
-    };    
+        }
+    };
 
     std::vector<Bucket> hash_table;
 
@@ -85,9 +92,10 @@ class Robin_Hood : public Hash_Algorithm<Key, T> {
 
 template <typename T>
 size_t hash_index(const T& value, size_t vector_size) {
-    return std::hash<T>{}(value)&(vector_size -1);
+    return std::hash<T>{}(value) & (vector_size - 1);
 }
 
+// Table display
 template <typename Key, typename T>
 void Robin_Hood<Key, T>::print() const {
     for (size_t i = 0; i < hash_table.size(); ++i) {
@@ -110,19 +118,20 @@ void Robin_Hood<Key, T>::print() const {
     std::cout << "END OF PRINT \n";
 }
 
+// Rehash function
 template <typename Key, typename T>
-void Robin_Hood<Key, T>::rehash(size_t new_capacity){
+void Robin_Hood<Key, T>::rehash(size_t new_capacity) {
     std::vector<Bucket> new_table(new_capacity);
 
     for (auto& entry : hash_table) {
         if (entry.tsl != -1) {
-
             auto key = entry.key;
             auto value = entry.value;
             int tsl = 0;
 
             size_t idx = hash_index(key, new_capacity);
 
+            // Robin insertion logic
             while (true) {
                 auto& new_entry = new_table[idx];
 
@@ -147,16 +156,16 @@ void Robin_Hood<Key, T>::rehash(size_t new_capacity){
     capacity = new_capacity;
 }
 
+// Robin Hood insertion
 template <typename Key, typename T>
 void Robin_Hood<Key, T>::emplace(const Key& key, const T& value) {
-
     if ((num_elements + 1) > 0.5 * capacity) {
         rehash(capacity * 2);
     }
 
     Bucket source;
-    source.assign(key , value , 0);
-    size_t idx =  hash_index(key, hash_table.size());
+    source.assign(key, value, 0);
+    size_t idx = hash_index(key, hash_table.size());
 
     do {
         auto& entry = hash_table[idx];
@@ -165,20 +174,19 @@ void Robin_Hood<Key, T>::emplace(const Key& key, const T& value) {
             num_elements++;
             return;
         }
-        if (entry.tsl < source.tsl)
-            std::swap(entry, source);
-        
+        if (entry.tsl < source.tsl) std::swap(entry, source);
+
         source.tsl++;
-        idx = (idx + 1) & (hash_table.size() -1);
+        idx = (idx + 1) & (hash_table.size() - 1);
     } while (true);
 }
 
 template <typename Key, typename T>
-std::vector<typename Robin_Hood<Key, T>::Bucket>&
-Robin_Hood<Key, T>::get_table() {
+std::vector<typename Robin_Hood<Key, T>::Bucket>& Robin_Hood<Key, T>::get_table() {
     return hash_table;
 }
 
+// Lookup by key using probe sequence
 template <typename Key, typename T>
 T& Robin_Hood<Key, T>::find(const Key& key) {
     size_t index = hash_index(key, hash_table.size());
@@ -191,16 +199,18 @@ T& Robin_Hood<Key, T>::find(const Key& key) {
         auto& value = entry.value;
         target_tsl = entry.tsl;
 
-        if (entry.tsl != -1 && target_key == key) return value; 
-        index = (index + 1) & (hash_table.size() -1);
+        if (entry.tsl != -1 && target_key == key) return value;
+        index = (index + 1) & (hash_table.size() - 1);
 
     } while (source_tsl++ <= target_tsl);
     static T dummy{};
     return dummy;
 }
 
+// Hopscotch Hashing
 template <typename Key, typename T>
 class Hopscotch : public Hash_Algorithm<Key, T> {
+    // Each bucket stores key, value, occupancy flag, and neighborhood bitmap
     struct Bucket {
         Key key;
         T value;
@@ -213,6 +223,7 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
     std::vector<Bucket> hash_table;
     size_t size, H, mask;
 
+    // Bitmap helpers
     inline void set_bit(uint64_t& bitmap, size_t i) { bitmap |= (1ull << i); }
 
     inline void clear_bit(uint64_t& bitmap, size_t i) { bitmap &= ~(1ull << i); }
@@ -223,6 +234,7 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
 
     inline int count_trail_zeros(const uint64_t& bitmap) const { return __builtin_ctzll(bitmap); }
 
+    // Rehash function
     void rehash() {
         std::vector<Bucket> old_hash_table = std::move(hash_table);
 
@@ -235,6 +247,7 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
             if (bucket.occupied) emplace(std::move(bucket.key), std::move(bucket.value));
     }
 
+    // Move data between buckets
     void move_payload(size_t dst, size_t src) {
         std::swap(hash_table[dst].key, hash_table[src].key);
         std::swap(hash_table[dst].value, hash_table[src].value);
@@ -256,6 +269,7 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
 
     std::vector<Bucket>& get_hashtable() { return hash_table; }
 
+    // Search within neighborhood
     T& find(const Key& key) override {
         size_t index = hash(key);
         uint64_t bitmap = hash_table[index].bitmap;
@@ -271,9 +285,11 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
         return dummy;
     }
 
+    // Insert key-value with neighborhood balancing
     void emplace(const Key& key, const T& value) override {
         size_t i = hash(key);
 
+        // Rehash if neighborhood full
         if (count_ones(hash_table[i].bitmap) == H) {
             rehash();
             emplace(std::move(key), std::move(value));
@@ -291,6 +307,7 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
 
         j = j & mask;
 
+        // Relocate buckets to bring new entry within neighborhood
         while (((j + size - i) & mask) >= H) {
             bool flag = false;
             for (size_t p = H - 1; p > 0; p--) {
@@ -314,12 +331,14 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
             }
         }
 
+        // Place key
         hash_table[j].key = key;
         hash_table[j].value = value;
         hash_table[j].occupied = true;
         set_bit(hash_table[i].bitmap, (j + size - i) & mask);
     }
 
+    // Hash table display
     void print() const {
         std::cout << "{\n";
         for (size_t i = 0; i < size; i++) {
@@ -342,8 +361,10 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
     }
 };
 
+// Cuckoo Hashing
 template <typename Key, typename T>
 class Cuckoo : public Hash_Algorithm<Key, T> {
+    // Each bucket stores one key-value pair and an occupancy flag
     struct Bucket {
         Key key;
         T value;
@@ -356,6 +377,7 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
 
     inline Bucket& get_bucket(size_t table_idx, size_t pos) { return hash_table[table_idx * size + pos]; }
 
+    // Rehash function
     void rehash() {
         std::vector<Bucket> old_hash_table = std::move(hash_table);
 
@@ -382,6 +404,7 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
 
     std::vector<Bucket>& get_hashtable() { return hash_table; }
 
+    // Find using two hash functions
     T& find(const Key& key) override {
         size_t h = hash(key);
         size_t idx1 = h & mask;
@@ -396,6 +419,7 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
         return dummy;
     }
 
+    // Cuckoo insertion (displace existing elements)
     void emplace(const Key& key, const T& value) override {
         if (total_active >= 2 * size * 0.7) rehash();
 
@@ -403,6 +427,7 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
         T curval = value;
         size_t table_idx = 0, swap_count = 0, max_swap = total_active;
 
+        // Swaps between two tables until an empty slot is found
         while (swap_count <= max_swap) {
             size_t idx, h = hash(curkey);
             if (table_idx == 0)
@@ -420,16 +445,19 @@ class Cuckoo : public Hash_Algorithm<Key, T> {
                 return;
             }
 
+            // Displace existing entry
             std::swap(curkey, bucket.key);
             std::swap(curval, bucket.value);
             table_idx = (table_idx + 1) & 1u;
             swap_count++;
         }
 
+        // Too many displacements, so make a rehash
         rehash();
         emplace(std::move(curkey), std::move(curval));
     }
 
+    // Print two cuckoo hash tables
     void print() const override {
         for (size_t t = 0; t < 2; t++) {
             std::cout << "Table " << t << ":\n";
