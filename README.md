@@ -61,7 +61,7 @@ The core data structure is an internal `Bucket` struct that holds: a key (`Key k
 | **Runtime Range**             | **1,298 ms** (difference between fastest and slowest)  |
 | **Runtime Variation**         | ±0.3% from the mean (extremely consistent performance) |
 
-The Robin Hood algorithm achieved an average total runtime of 210.9 seconds (≈ 3 minutes 31 seconds) across five independent runs. Performance was remarkably consistent, with a standard deviation under 0.3% of the mean total runtime. The most computationally expensive queries were 8c, 8d, and 17a, each contributing significantly to total execution time, while smaller queries (e.g. 1-5) executed in under 300 ms. This indicates the implementation scales well but is sensitive to large join sizes or skewed key distributions.
+The Robin Hood algorithm achieved an average total runtime of 210.9 seconds (≈ 3 minutes 31 seconds) across five independent runs. Performance was remarkably consistent, with a standard deviation under 0.3% of the mean total runtime. The most computationally expensive queries were 8c, 8d, and 17a, each contributing significantly to total execution time, while smaller queries (e.g. 1-5) executed in under 700 ms. This indicates the implementation scales well but is sensitive to large join sizes or skewed key distributions.
 
 - Most Expensive Queries:
 
@@ -217,8 +217,6 @@ The Cuckoo class uses a single vector of buckets (hash_table) to represent the t
 
 #### Statistics
 
-The Cuckoo algorithm achieved an average total runtime of 138.5 seconds (≈ 2 minutes 18 seconds) across five independent runs. Runtime variation was under 0.5%, showing excellent stability and repeatability. The most computationally expensive queries were 8c, 8d, 16b and 20a, corresponding to larger join workloads that likely triggered rehashing and key relocation. Smaller queries (most in groups 1-5) completed in under 300 ms, showcasing efficient performance under lighter workloads. Overall, Cuckoo Join Hash exhibits predictable, stable, and correct performance, with minimal runtime variance and excellent scalability across diverse query types.
-
 | Metric                        |                          Value                           |
 | :---------------------------- | :------------------------------------------------------: |
 | **Average Total Runtime**     |                      **138,509 ms**                      |
@@ -227,6 +225,8 @@ The Cuckoo algorithm achieved an average total runtime of 138.5 seconds (≈ 2 m
 | **Slowest Run**               |                  Run 4 - **139,003 ms**                  |
 | **Runtime Range**             |  **1,178 ms** (difference between fastest and slowest)   |
 | **Runtime Variation**         | ±0.4% from the mean - (extremely consistent performance) |
+
+The Cuckoo algorithm achieved an average total runtime of 138.5 seconds (≈ 2 minutes 18 seconds) across five independent runs. Runtime variation was under 0.5%, showing excellent stability and repeatability. The most computationally expensive queries were 8c, 8d, 16b and 20a, corresponding to larger join workloads that likely triggered rehashing and key relocation. Smaller queries (most in groups 1-5) completed in under 300 ms, showcasing efficient performance under lighter workloads. Overall, Cuckoo Join Hash exhibits predictable, stable, and correct performance, with minimal runtime variance and excellent scalability across diverse query types.
 
 - Most Expensive Queries
 
