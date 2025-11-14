@@ -59,6 +59,8 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(fmtlib)
 
+set(OVERRIDE_GIT_DESCRIBE "v1.2.1-0-g0000000")
+
 FetchContent_Declare(
     duckdb
     URL https://github.com/duckdb/duckdb/archive/refs/tags/v1.2.1.tar.gz
