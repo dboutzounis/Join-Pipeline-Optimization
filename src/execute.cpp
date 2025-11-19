@@ -1,11 +1,13 @@
 #include <hardware.h>
 #include <hash_algo.h>
+#include <inner_column.h>
+#include <materialization.h>
 #include <plan.h>
 #include <table.h>
 
 namespace Contest {
 
-using ExecuteResult = std::vector<std::vector<Data>>;
+using ExecuteResult = std::vector<std::vector<value_t>>;
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx);
 
@@ -120,7 +122,7 @@ ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const st
     auto& right_types = right_node.output_attrs;
     auto left = execute_impl(plan, left_idx);
     auto right = execute_impl(plan, right_idx);
-    std::vector<std::vector<Data>> results;
+    std::vector<std::vector<value_t>> results;
 
     JoinAlgorithm join_algorithm{.build_left = join.build_left,
                                  .left = left,
@@ -164,10 +166,96 @@ ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const st
     return results;
 }
 
+bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
+    auto byte_idx = idx / 8;
+    auto bit = idx % 8;
+    return bitmap[byte_idx] & (1u << bit);
+}
+
+std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, const ColumnarTable& table,
+                                                            const std::vector<std::tuple<size_t, DataType>>& output_attrs, uint8_t table_id) {
+    namespace views = ranges::views;
+    std::vector<std::vector<value_t>> results(table.num_rows, std::vector<value_t>(output_attrs.size(), value_t{}));
+    std::vector<DataType> types(table.columns.size());
+    auto task = [&](size_t begin, size_t end) {
+        size_t col_pap = 0;
+        for (size_t column_idx = begin; column_idx < end; ++column_idx) {
+            size_t in_col_idx = std::get<0>(output_attrs[column_idx]);
+            auto& column = table.columns[in_col_idx];
+            types[in_col_idx] = column.type;
+            size_t row_idx = 0;
+            for (uint16_t page_id = 0; page_id < column.pages.size(); page_id++) {
+                auto* page = column.pages[page_id]->data;
+                switch (column.type) {
+                    case DataType::INT32: {
+                        auto num_rows = *reinterpret_cast<uint16_t*>(page);
+                        auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
+                        auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+                        uint16_t data_idx = 0;
+                        for (uint16_t i = 0; i < num_rows; ++i) {
+                            if (get_bitmap(bitmap, i)) {
+                                auto value = data_begin[data_idx++];
+                                if (row_idx >= table.num_rows) {
+                                    throw std::runtime_error("row_idx");
+                                }
+                                results[row_idx++][column_idx] = value_t::from_int32(value);
+                            } else {
+                                ++row_idx;
+                            }
+                        }
+                        break;
+                    }
+                    case DataType::VARCHAR: {
+                        auto num_rows = *reinterpret_cast<uint16_t*>(page);
+                        if (num_rows == 0xffff) {
+                            auto num_chars = *reinterpret_cast<uint16_t*>(page + 2);
+                            auto* data_begin = reinterpret_cast<char*>(page + 4);
+                            if (row_idx >= table.num_rows) {
+                                throw std::runtime_error("row_idx");
+                            }
+
+                            Smart_string smart_string(table_id, in_col_idx, page_id, 0);
+
+                            results[row_idx++][column_idx] = value_t::from_string(smart_string);
+                        } else if (num_rows == 0xfffe) {
+                            continue;
+                        } else {
+                            auto num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
+                            auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
+                            auto* data_begin = reinterpret_cast<char*>(page + 4 + num_non_null * 2);
+                            auto* string_begin = data_begin;
+                            auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+                            uint16_t data_idx = 0;
+                            for (uint16_t i = 0; i < num_rows; ++i) {
+                                if (get_bitmap(bitmap, i)) {
+                                    auto offset = offset_begin[data_idx++];
+                                    std::string value{string_begin, data_begin + offset};
+                                    string_begin = data_begin + offset;
+                                    if (row_idx >= table.num_rows) {
+                                        throw std::runtime_error("row_idx");
+                                    }
+
+                                    Smart_string smart_string(table_id, in_col_idx, page_id, data_idx - 1);
+                                    results[row_idx++][column_idx] = value_t::from_string(smart_string);
+                                } else {
+                                    ++row_idx;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    };
+    filter_tp.run(task, output_attrs.size());
+    return results;
+}
+
 ExecuteResult execute_scan(const Plan& plan, const ScanNode& scan, const std::vector<std::tuple<size_t, DataType>>& output_attrs) {
     auto table_id = scan.base_table_id;
     auto& input = plan.inputs[table_id];
-    return Table::copy_scan(input, output_attrs);
+    return copy_scan_materialization(plan, input, output_attrs, table_id);
 }
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx) {
@@ -184,11 +272,27 @@ ExecuteResult execute_impl(const Plan& plan, size_t node_idx) {
         node.data);
 }
 
+std::vector<std::vector<Data>> convert_from_value_t_to_Data(const Plan& plan, const ExecuteResult& result) {
+    std::vector<std::vector<Data>> transformed_results(result.size(), std::vector<Data>(result[0].size(), std::monostate{}));
+
+    for (size_t i = 0; i < result.size(); i++) {
+        for (size_t j = 0; j < result[i].size(); j++) {
+            if (result[i][j].type == ValueType::INT32)
+                transformed_results[i][j].emplace<int32_t>(std::move(result[i][j].i32));
+            else if (result[i][j].type == ValueType::SMART_STRING)
+                transformed_results[i][j].emplace<std::string>(std::move(static_cast<Smart_string>(result[i][j].stringref).get_value(plan)));
+        }
+    }
+
+    return transformed_results;
+}
+
 ColumnarTable execute(const Plan& plan, [[maybe_unused]] void* context) {
     namespace views = ranges::views;
     auto ret = execute_impl(plan, plan.root);
     auto ret_types = plan.nodes[plan.root].output_attrs | views::transform([](const auto& v) { return std::get<1>(v); }) | ranges::to<std::vector<DataType>>();
-    Table table{std::move(ret), std::move(ret_types)};
+    auto trans_ret = convert_from_value_t_to_Data(plan, ret);
+    Table table{std::move(trans_ret), std::move(ret_types)};
     return table.to_columnar();
 }
 
