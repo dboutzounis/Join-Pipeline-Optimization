@@ -131,37 +131,37 @@ ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const st
                                  .left_col = join.left_attr,
                                  .right_col = join.right_attr,
                                  .output_attrs = output_attrs};
-    if (join.build_left) {
-        switch (std::get<1>(left_types[join.left_attr])) {
-            case DataType::INT32:
-                join_algorithm.run<int32_t>();
-                break;
-            case DataType::INT64:
-                join_algorithm.run<int64_t>();
-                break;
-            case DataType::FP64:
-                join_algorithm.run<double>();
-                break;
-            case DataType::VARCHAR:
-                join_algorithm.run<std::string>();
-                break;
-        }
-    } else {
-        switch (std::get<1>(right_types[join.right_attr])) {
-            case DataType::INT32:
-                join_algorithm.run<int32_t>();
-                break;
-            case DataType::INT64:
-                join_algorithm.run<int64_t>();
-                break;
-            case DataType::FP64:
-                join_algorithm.run<double>();
-                break;
-            case DataType::VARCHAR:
-                join_algorithm.run<std::string>();
-                break;
-        }
-    }
+    // if (join.build_left) {
+    //     switch (std::get<1>(left_types[join.left_attr])) {
+    //         case DataType::INT32:
+    //             join_algorithm.run<int32_t>();
+    //             break;
+    //         case DataType::INT64:
+    //             join_algorithm.run<int64_t>();
+    //             break;
+    //         case DataType::FP64:
+    //             join_algorithm.run<double>();
+    //             break;
+    //         case DataType::VARCHAR:
+    //             join_algorithm.run<std::string>();
+    //             break;
+    //     }
+    // } else {
+    //     switch (std::get<1>(right_types[join.right_attr])) {
+    //         case DataType::INT32:
+    //             join_algorithm.run<int32_t>();
+    //             break;
+    //         case DataType::INT64:
+    //             join_algorithm.run<int64_t>();
+    //             break;
+    //         case DataType::FP64:
+    //             join_algorithm.run<double>();
+    //             break;
+    //         case DataType::VARCHAR:
+    //             join_algorithm.run<std::string>();
+    //             break;
+    //     }
+    // }
 
     return results;
 }
@@ -184,7 +184,7 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
             auto& column = table.columns[in_col_idx];
             types[in_col_idx] = column.type;
             size_t row_idx = 0;
-            for (uint16_t page_id = 0; page_id < column.pages.size(); page_id++) {
+            for (uint32_t page_id = 0; page_id < column.pages.size(); page_id++) {
                 auto* page = column.pages[page_id]->data;
                 switch (column.type) {
                     case DataType::INT32: {
@@ -214,8 +214,8 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
                                 throw std::runtime_error("row_idx");
                             }
 
-                            Smart_string smart_string(table_id, in_col_idx, page_id, 0);
-
+                            Smart_string smart_string;
+                            smart_string = Smart_string::encode(table_id, in_col_idx, page_id, 0);
                             results[row_idx++][column_idx] = value_t::from_string(smart_string);
                         } else if (num_rows == 0xfffe) {
                             continue;
@@ -228,14 +228,15 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
                             uint16_t data_idx = 0;
                             for (uint16_t i = 0; i < num_rows; ++i) {
                                 if (get_bitmap(bitmap, i)) {
-                                    auto offset = offset_begin[data_idx++];
+                                    auto offset = offset_begin[data_idx];
                                     std::string value{string_begin, data_begin + offset};
                                     string_begin = data_begin + offset;
                                     if (row_idx >= table.num_rows) {
                                         throw std::runtime_error("row_idx");
                                     }
 
-                                    Smart_string smart_string(table_id, in_col_idx, page_id, data_idx - 1);
+                                    Smart_string smart_string;
+                                    smart_string = Smart_string::encode(table_id, in_col_idx, page_id, data_idx++);
                                     results[row_idx++][column_idx] = value_t::from_string(smart_string);
                                 } else {
                                     ++row_idx;
@@ -272,15 +273,32 @@ ExecuteResult execute_impl(const Plan& plan, size_t node_idx) {
         node.data);
 }
 
-std::vector<std::vector<Data>> convert_from_value_t_to_Data(const Plan& plan, const ExecuteResult& result) {
-    std::vector<std::vector<Data>> transformed_results(result.size(), std::vector<Data>(result[0].size(), std::monostate{}));
+std::vector<std::vector<Data>> convert_from_value_t_to_Data(const Plan& plan, const ExecuteResult& result, const std::vector<DataType>& ret_types) {
+    if (result.empty()) return {};
 
-    for (size_t i = 0; i < result.size(); i++) {
-        for (size_t j = 0; j < result[i].size(); j++) {
-            if (result[i][j].type == ValueType::INT32)
-                transformed_results[i][j].emplace<int32_t>(std::move(result[i][j].i32));
-            else if (result[i][j].type == ValueType::SMART_STRING)
-                transformed_results[i][j].emplace<std::string>(std::move(static_cast<Smart_string>(result[i][j].stringref).get_value(plan)));
+    size_t rows = result.size();
+    size_t cols = result[0].size();
+
+    if (ret_types.size() != cols) throw std::runtime_error("convert_from_value_t_to_Data: ret_types size mismatch");
+
+    std::vector<std::vector<Data>> transformed_results(rows, std::vector<Data>(cols, std::monostate{}));
+
+    for (size_t i = 0; i < rows; ++i) {
+        if (result[i].size() != cols) throw std::runtime_error("convert_from_value_t_to_Data: inconsistent row widths");
+        for (size_t j = 0; j < cols; ++j) {
+            const value_t& v = result[i][j];
+            if (v.is_null()) continue;
+
+            if (ret_types[j] == DataType::INT32) {
+                int32_t val = v.get_int32();
+                transformed_results[i][j].emplace<int32_t>(val);
+            } else if (ret_types[j] == DataType::VARCHAR) {
+                Smart_string s = v.get_string();
+                std::string materialized = s.get_value(plan);
+                transformed_results[i][j].emplace<std::string>(std::move(materialized));
+            } else {
+                throw std::runtime_error("convert_from_value_t_to_Data: unsupported DataType in ret_types");
+            }
         }
     }
 
@@ -291,7 +309,7 @@ ColumnarTable execute(const Plan& plan, [[maybe_unused]] void* context) {
     namespace views = ranges::views;
     auto ret = execute_impl(plan, plan.root);
     auto ret_types = plan.nodes[plan.root].output_attrs | views::transform([](const auto& v) { return std::get<1>(v); }) | ranges::to<std::vector<DataType>>();
-    auto trans_ret = convert_from_value_t_to_Data(plan, ret);
+    auto trans_ret = convert_from_value_t_to_Data(plan, ret, ret_types);
     Table table{std::move(trans_ret), std::move(ret_types)};
     return table.to_columnar();
 }
