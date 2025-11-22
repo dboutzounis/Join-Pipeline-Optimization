@@ -79,7 +79,7 @@ enum class ValueType : uint8_t {
     SMART_STRING = 0b10,
 };
 
-union value_t {
+struct value_t {
     uint64_t data;
 
     value_t() : data(static_cast<uint64_t>(ValueType::NONE)) {}
