@@ -2,12 +2,13 @@
 #include <hash_algo.h>
 #include <inner_column.h>
 #include <materialization.h>
+#include <column_t.h>
 #include <plan.h>
 #include <table.h>
 
 namespace Contest {
 
-using ExecuteResult = std::vector<std::vector<value_t>>;
+using ExecuteResult = std::vector<Column_t>;
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx);
 
@@ -29,41 +30,45 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
         namespace views = ranges::views;
-        HASH_ALGO_TYPE<T, std::vector<size_t>> hash_table;
+        Robin_Hood<T, std::vector<size_t>> hash_table;
         if (build_left) {
-            for (auto&& [idx, record] : left | views::enumerate) {
-                auto smart_key = extract_key<T>(record[left_col]);
+            for (size_t idx = 0; idx < left[0].total_size; idx++) {
+                value_t val = left[left_col].get_at(idx);
+
+                auto smart_key = extract_key<T>(val);
                 if (!smart_key) continue;
+
                 const T& key = *smart_key;
+
                 if (auto& itr_vec = hash_table.find(key); itr_vec.size() == 0) {
                     hash_table.emplace(key, std::vector<size_t>(1, idx));
                 } else {
                     itr_vec.push_back(idx);
                 }
             }
-            for (auto& right_record : right) {
-                auto smart_key = extract_key<T>(right_record[right_col]);
+            for (size_t right_idx = 0 ; right_idx < right[0].total_size; right_idx++) {
+                auto smart_key = extract_key<T>(right[right_col].get_at(right_idx));
                 if (!smart_key) continue;
                 const T& key = *smart_key;
                 if (auto& itr_vec = hash_table.find(key); itr_vec.size() != 0) {
                     for (auto left_idx : itr_vec) {
-                        auto& left_record = left[left_idx];
-                        std::vector<value_t> new_record;
-                        new_record.reserve(output_attrs.size());
+                        size_t out_idx = 0;
                         for (auto [col_idx, _] : output_attrs) {
-                            if (col_idx < left_record.size()) {
-                                new_record.emplace_back(left_record[col_idx]);
+                            if (col_idx < left.size()) {
+                                results[out_idx++].push_back(left[col_idx].get_at(left_idx));
                             } else {
-                                new_record.emplace_back(right_record[col_idx - left_record.size()]);
+                                results[out_idx++].push_back(right[col_idx - left.size()].get_at(right_idx));
                             }
                         }
-                        results.emplace_back(std::move(new_record));
+        
                     }
                 }
             }
         } else {
-            for (auto&& [idx, record] : right | views::enumerate) {
-                auto smart_key = extract_key<T>(record[right_col]);
+
+            for (size_t idx = 0; idx < right[0].total_size; idx++) {
+                value_t val = right[right_col].get_at(idx);
+                auto smart_key = extract_key<T>(val);
                 if (!smart_key) continue;
                 const T& key = *smart_key;
                 if (auto& itr_vec = hash_table.find(key); itr_vec.size() == 0) {
@@ -72,28 +77,25 @@ struct JoinAlgorithm {
                     itr_vec.push_back(idx);
                 }
             }
-            for (auto& left_record : left) {
-                auto smart_key = extract_key<T>(left_record[left_col]);
+            for (size_t left_idx = 0; left_idx < left[0].total_size; left_idx++) {
+                auto smart_key = extract_key<T>(left[left_col].get_at(left_idx));
                 if (!smart_key) continue;
                 const T& key = *smart_key;
                 if (auto& itr_vec = hash_table.find(key); itr_vec.size() != 0) {
                     for (auto right_idx : itr_vec) {
-                        auto& right_record = right[right_idx];
-                        std::vector<value_t> new_record;
-                        new_record.reserve(output_attrs.size());
+                        size_t out_idx = 0;
                         for (auto [col_idx, _] : output_attrs) {
-                            if (col_idx < left_record.size()) {
-                                new_record.emplace_back(left_record[col_idx]);
+                            if (col_idx < left.size()) {
+                                results[out_idx++].push_back(left[col_idx].get_at(left_idx));
                             } else {
-                                new_record.emplace_back(right_record[col_idx - left_record.size()]);
+                                results[out_idx++].push_back(right[col_idx - left.size()].get_at(right_idx));
                             }
                         }
-                        results.emplace_back(std::move(new_record));
                     }
                 }
             }
         }
-    }
+    }   
 };
 
 template <>
@@ -120,7 +122,7 @@ ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const st
     auto& right_types = right_node.output_attrs;
     auto left = execute_impl(plan, left_idx);
     auto right = execute_impl(plan, right_idx);
-    std::vector<std::vector<value_t>> results;
+    std::vector<Column_t> results(output_attrs.size());
 
     JoinAlgorithm join_algorithm{.build_left = join.build_left,
                                  .plan = plan,
@@ -159,10 +161,10 @@ bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
     return bitmap[byte_idx] & (1u << bit);
 }
 
-std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, const ColumnarTable& table,
+std::vector<Column_t> copy_scan_materialization(const Plan& plan, const ColumnarTable& table,
                                                             const std::vector<std::tuple<size_t, DataType>>& output_attrs, uint8_t table_id) {
     namespace views = ranges::views;
-    std::vector<std::vector<value_t>> results(table.num_rows, std::vector<value_t>(output_attrs.size(), value_t{}));
+    std::vector<Column_t> results(output_attrs.size());
     std::vector<DataType> types(table.columns.size());
     auto task = [&](size_t begin, size_t end) {
         size_t col_pap = 0;
@@ -185,10 +187,12 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
                                 if (row_idx >= table.num_rows) {
                                     throw std::runtime_error("row_idx");
                                 }
-                                results[row_idx++][column_idx] = value_t::from_int32(value);
+                                results[column_idx].push_back(value_t::from_int32(value));
                             } else {
+                                results[column_idx].push_back(value_t::null_value());
                                 ++row_idx;
-                            }
+                            } 
+                           
                         }
                         break;
                     }
@@ -203,7 +207,7 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
 
                             Smart_string smart_string;
                             smart_string = Smart_string::encode(table_id, in_col_idx, page_id, 0);
-                            results[row_idx++][column_idx] = value_t::from_string(smart_string);
+                            results[column_idx].push_back(value_t::from_string(smart_string));
                         } else if (num_rows == 0xfffe) {
                             continue;
                         } else {
@@ -224,10 +228,13 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
 
                                     Smart_string smart_string;
                                     smart_string = Smart_string::encode(table_id, in_col_idx, page_id, data_idx++);
-                                    results[row_idx++][column_idx] = value_t::from_string(smart_string);
+                                    results[column_idx].push_back(value_t::from_string(smart_string));
+                                   
                                 } else {
+                                    results[column_idx].push_back(value_t::null_value());
                                     ++row_idx;
                                 }
+                              
                             }
                         }
                         break;
@@ -260,38 +267,6 @@ ExecuteResult execute_impl(const Plan& plan, size_t node_idx) {
         node.data);
 }
 
-std::vector<std::vector<Data>> convert_from_value_t_to_Data(const Plan& plan, const ExecuteResult& result, const std::vector<DataType>& ret_types) {
-    if (result.empty()) return {};
-
-    size_t rows = result.size();
-    size_t cols = result[0].size();
-
-    if (ret_types.size() != cols) throw std::runtime_error("convert_from_value_t_to_Data: ret_types size mismatch");
-
-    std::vector<std::vector<Data>> transformed_results(rows, std::vector<Data>(cols, std::monostate{}));
-
-    for (size_t i = 0; i < rows; ++i) {
-        if (result[i].size() != cols) throw std::runtime_error("convert_from_value_t_to_Data: inconsistent row widths");
-        for (size_t j = 0; j < cols; ++j) {
-            const value_t& v = result[i][j];
-            if (v.is_null()) continue;
-
-            if (ret_types[j] == DataType::INT32) {
-                int32_t val = v.get_int32();
-                transformed_results[i][j].emplace<int32_t>(val);
-            } else if (ret_types[j] == DataType::VARCHAR) {
-                Smart_string s = v.get_string();
-                std::string materialized = s.get_value(plan);
-                transformed_results[i][j].emplace<std::string>(std::move(materialized));
-            } else {
-                throw std::runtime_error("convert_from_value_t_to_Data: unsupported DataType in ret_types");
-            }
-        }
-    }
-
-    return transformed_results;
-}
-
 void set_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
     while (bitmap.size() < idx / 8 + 1) {
         bitmap.emplace_back(0);
@@ -313,7 +288,7 @@ void unset_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
 ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const std::vector<DataType>& ret_types) {
     namespace views = ranges::views;
     ColumnarTable ret;
-    ret.num_rows = result.size();
+    ret.num_rows = result.empty() ? 0 : result[0].total_size;
     for (auto [col_idx, data_type] : ret_types | views::enumerate) {
         ret.columns.emplace_back(data_type);
         auto& column = ret.columns.back();
@@ -334,8 +309,8 @@ ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const s
                     data.clear();
                     bitmap.clear();
                 };
-                for (auto& record : result) {
-                    auto& value = record[col_idx];
+                for (size_t index  = 0 ; index < result[col_idx].total_size ;index++) {
+                    auto value = result[col_idx].get_at(index);
                     if (value.get_type() == ValueType::INT32) {
                         if (4 + (data.size() + 1) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
                             save_page();
@@ -393,8 +368,8 @@ ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const s
                     offsets.clear();
                     bitmap.clear();
                 };
-                for (auto& record : result) {
-                    auto& value = record[col_idx];
+                for (size_t index  = 0 ; index < result[col_idx].total_size ; index++) {
+                    auto value = result[col_idx].get_at(index);
                     if (value.get_type() == ValueType::SMART_STRING) {
                         std::string str = value.get_string().get_value(plan);
                         if (str.size() > PAGE_SIZE - 7) {
@@ -442,4 +417,4 @@ void* build_context() { return nullptr; }
 
 void destroy_context([[maybe_unused]] void* context) {}
 
-}  // namespace Contest
+};  // namespace Contest

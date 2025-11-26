@@ -5,7 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <thread>
-
+#include "materialization.h"
+#include "column_t.h"
 #include "hash_algo.h"
 
 void sort(std::vector<std::vector<Data>>& table) { std::sort(table.begin(), table.end()); }
@@ -993,4 +994,147 @@ TEST_CASE("Cuckoo rehash timeout detection (non-blocking)", "[cuckoo][cuckoo_cir
         SUCCEED("emplace() did not finish within 500 ms — expected infinite loop detected");
     else
         FAIL("emplace() returned unexpectedly — rehash completed (or fixed");
+}
+
+TEST_CASE("Column_t basic push/get operations", "[column_t]") {
+
+    Column_t col;
+
+    SECTION("Push and read values within a single page") {
+        for (int i = 0; i < 100; i++) {
+            col.push_back(value_t::from_int32(i));
+        }
+
+        REQUIRE(col.total_size == 100);
+
+        for (int i = 0; i < 100; i++) {
+            value_t v = col.get_at(i);
+            REQUIRE(v.get_int32() == i);
+        }
+    }
+
+    SECTION("Push across page boundary and read correctly") {
+        // Fill FULL first page
+        for (int i = 0; i < PAGE_T_SIZE; i++) {
+            col.push_back(value_t::from_int32(i));
+        }
+
+        // Push into second page
+        col.push_back(value_t::from_int32(9999));
+
+        REQUIRE(col.total_size == PAGE_T_SIZE + 1);
+        REQUIRE(col.pages.size() == 2);   // second page allocated
+
+        // Check boundary values
+        REQUIRE(col.get_at(0).get_int32() == 0);
+        REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == PAGE_T_SIZE - 1);
+        REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == 9999);
+    }
+
+    SECTION("Out-of-bounds returns NULL value") {
+        col.push_back(value_t::from_int32(7));
+
+        REQUIRE(col.get_at(-1).is_null());
+        REQUIRE(col.get_at(1).is_null());
+        REQUIRE(col.get_at(999).is_null());
+    }
+}
+TEST_CASE("Column_t stress tests", "[column_t]") {
+
+    Column_t col;
+
+    SECTION("Basic push and get") {
+        for (int i = 0; i < 100; i++)
+            col.push_back(value_t::from_int32(i));
+
+        REQUIRE(col.total_size == 100);
+
+        for (int i = 0; i < 100; i++) {
+            value_t v = col.get_at(i);
+            REQUIRE(v.get_type() == ValueType::INT32);
+            REQUIRE(v.get_int32() == i);
+        }
+    }
+
+    SECTION("Crossing multiple pages") {
+        const int N = PAGE_T_SIZE * 3 + 123;
+
+        for (int i = 0; i < N; i++)
+            col.push_back(value_t::from_int32(i));
+
+        REQUIRE(col.total_size == N);
+        REQUIRE(col.pages.size() == 4);
+
+        REQUIRE(col.get_at(0).get_int32() == 0);
+        REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == PAGE_T_SIZE - 1);
+        REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == PAGE_T_SIZE);
+        REQUIRE(col.get_at(PAGE_T_SIZE * 3 + 122).get_int32() == PAGE_T_SIZE * 3 + 122);
+    }
+
+    SECTION("Handling NULLs correctly") {
+        col.push_back(value_t::null_value());
+        col.push_back(value_t::from_int32(10));
+        col.push_back(value_t::null_value());
+
+        REQUIRE(col.total_size == 3);
+
+        REQUIRE(col.get_at(0).is_null());
+        REQUIRE(col.get_at(1).get_int32() == 10);
+        REQUIRE(col.get_at(2).is_null());
+    }
+
+    SECTION("Randomized stress test") {
+        const int N = PAGE_T_SIZE * 5 + 777;
+
+        std::vector<std::optional<int>> ground_truth;
+        ground_truth.reserve(N);
+
+        std::mt19937 rng(12345);
+        std::uniform_int_distribution<int> pick(0, 10);
+
+        for (int i = 0; i < N; i++) {
+            int r = pick(rng);
+            if (r == 0) {
+                col.push_back(value_t::null_value());
+                ground_truth.push_back(std::nullopt);
+            } else {
+                col.push_back(value_t::from_int32(r));
+                ground_truth.push_back(r);
+            }
+        }
+
+        REQUIRE(col.total_size == N);
+
+        for (int i = 0; i < N; i++) {
+            value_t v = col.get_at(i);
+            if (!ground_truth[i].has_value()) {
+                REQUIRE(v.is_null());
+            } else {
+                REQUIRE(v.get_int32() == ground_truth[i].value());
+            }
+        }
+    }
+
+    SECTION("Out-of-bounds reads") {
+        col.push_back(value_t::from_int32(7));
+
+        REQUIRE(col.get_at(1).is_null());
+        REQUIRE(col.get_at(PAGE_T_SIZE + 5).is_null());
+        REQUIRE(col.get_at(99999).is_null());
+    }
+
+    SECTION("Large volume test (millions)") {
+        const int N = PAGE_T_SIZE * 50 + 1025;
+
+        for (int i = 0; i < N; i++)
+            col.push_back(value_t::from_int32(i));
+
+        REQUIRE(col.total_size == N);
+        REQUIRE(col.pages.size() == 52);
+
+        // check a few random points
+        REQUIRE(col.get_at(0).get_int32() == 0);
+        REQUIRE(col.get_at(PAGE_T_SIZE * 10 + 33).get_int32() == PAGE_T_SIZE * 10 + 33);
+        REQUIRE(col.get_at(N - 1).get_int32() == N - 1);
+    }
 }
