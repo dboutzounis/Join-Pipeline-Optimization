@@ -30,7 +30,7 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
         namespace views = ranges::views;
-        Robin_Hood<T, std::vector<size_t>> hash_table;
+        HASH_ALGO_TYPE <T, std::vector<size_t>> hash_table;
         if (build_left) {
             for (size_t idx = 0; idx < left[0].total_size; idx++) {
                 value_t val = left[left_col].get_at(idx);
@@ -164,7 +164,7 @@ bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
 std::vector<Column_t> copy_scan_materialization(const Plan& plan, const ColumnarTable& table,
                                                             const std::vector<std::tuple<size_t, DataType>>& output_attrs, uint8_t table_id) {
     namespace views = ranges::views;
-    std::vector<Column_t> results(output_attrs.size());
+    std::vector<Column_t> results(output_attrs.size() ,Column_t(table.num_rows));
     std::vector<DataType> types(table.columns.size());
     auto task = [&](size_t begin, size_t end) {
         size_t col_pap = 0;
@@ -172,7 +172,6 @@ std::vector<Column_t> copy_scan_materialization(const Plan& plan, const Columnar
             size_t in_col_idx = std::get<0>(output_attrs[column_idx]);
             auto& column = table.columns[in_col_idx];
             types[in_col_idx] = column.type;
-            size_t row_idx = 0;
             for (uint32_t page_id = 0; page_id < column.pages.size(); page_id++) {
                 auto* page = column.pages[page_id]->data;
                 switch (column.type) {
@@ -184,13 +183,10 @@ std::vector<Column_t> copy_scan_materialization(const Plan& plan, const Columnar
                         for (uint16_t i = 0; i < num_rows; ++i) {
                             if (get_bitmap(bitmap, i)) {
                                 auto value = data_begin[data_idx++];
-                                if (row_idx >= table.num_rows) {
-                                    throw std::runtime_error("row_idx");
-                                }
+
                                 results[column_idx].push_back(value_t::from_int32(value));
                             } else {
                                 results[column_idx].push_back(value_t::null_value());
-                                ++row_idx;
                             } 
                            
                         }
@@ -201,9 +197,6 @@ std::vector<Column_t> copy_scan_materialization(const Plan& plan, const Columnar
                         if (num_rows == 0xffff) {
                             auto num_chars = *reinterpret_cast<uint16_t*>(page + 2);
                             auto* data_begin = reinterpret_cast<char*>(page + 4);
-                            if (row_idx >= table.num_rows) {
-                                throw std::runtime_error("row_idx");
-                            }
 
                             Smart_string smart_string;
                             smart_string = Smart_string::encode(table_id, in_col_idx, page_id, 0);
@@ -222,17 +215,12 @@ std::vector<Column_t> copy_scan_materialization(const Plan& plan, const Columnar
                                     auto offset = offset_begin[data_idx];
                                     std::string value{string_begin, data_begin + offset};
                                     string_begin = data_begin + offset;
-                                    if (row_idx >= table.num_rows) {
-                                        throw std::runtime_error("row_idx");
-                                    }
-
+                        
                                     Smart_string smart_string;
                                     smart_string = Smart_string::encode(table_id, in_col_idx, page_id, data_idx++);
                                     results[column_idx].push_back(value_t::from_string(smart_string));
-                                   
                                 } else {
                                     results[column_idx].push_back(value_t::null_value());
-                                    ++row_idx;
                                 }
                               
                             }

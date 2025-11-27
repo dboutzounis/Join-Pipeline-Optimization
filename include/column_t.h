@@ -15,26 +15,26 @@ struct Page_t {
 };
 
 struct Column_t {
-    std::vector<Page_t*> pages;
+    std::vector<Page_t> pages;
     size_t total_size = 0;
 
     Column_t() : total_size(0) {}
 
-    ~Column_t() {
-        for (auto* p : pages) {
-            delete p;
-        }
+    Column_t(size_t expected_rows): total_size(0){  
+        size_t pages_needed = (expected_rows + PAGE_T_SIZE - 1) / PAGE_T_SIZE;
+        pages.assign(pages_needed , Page_t());
+
     }
     void push_back(const value_t& v) {
         size_t pageIndex = total_size >> PAGE_SHIFT;
         size_t offset    = total_size & PAGE_MASK;
 
-        if (offset == 0) {
+        if (offset == 0 && pages.size() <= pageIndex) {
             // need a new page
-            pages.push_back(new Page_t());
+            pages.push_back(Page_t());
         }
 
-        pages[pageIndex]->values[offset] = v;
+        pages[pageIndex].values[offset] = v;
         total_size++;
     }
 
@@ -45,7 +45,7 @@ struct Column_t {
         size_t pageIndex = index >> PAGE_SHIFT;
         size_t offset    = index & PAGE_MASK;
 
-        return pages[pageIndex]->values[offset];
+        return pages[pageIndex].values[offset];
     }
 
 };
