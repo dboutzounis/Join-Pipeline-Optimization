@@ -1,9 +1,10 @@
 #pragma once
-#include <memory>
-#include <cstddef>
 #include <cassert>
+#include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <vector>
+
 #include "materialization.h"
 
 #define PAGE_T_SIZE 1024
@@ -20,14 +21,13 @@ struct Column_t {
 
     Column_t() : total_size(0) {}
 
-    Column_t(size_t expected_rows): total_size(0){  
+    Column_t(size_t expected_rows) : total_size(0) {
         size_t pages_needed = (expected_rows + PAGE_T_SIZE - 1) / PAGE_T_SIZE;
-        pages.assign(pages_needed , Page_t());
-
+        pages.assign(pages_needed, Page_t());
     }
     void push_back(const value_t& v) {
         size_t pageIndex = total_size >> PAGE_SHIFT;
-        size_t offset    = total_size & PAGE_MASK;
+        size_t offset = total_size & PAGE_MASK;
 
         if (offset == 0 && pages.size() <= pageIndex) {
             // need a new page
@@ -38,15 +38,12 @@ struct Column_t {
         total_size++;
     }
 
-    value_t get_at(size_t index)const{
-        if (index >= total_size)
-            return value_t::null_value();
+    value_t get_at(size_t index) const {
+        if (index >= total_size) return value_t::null_value();
 
         size_t pageIndex = index >> PAGE_SHIFT;
-        size_t offset    = index & PAGE_MASK;
+        size_t offset = index & PAGE_MASK;
 
         return pages[pageIndex].values[offset];
     }
-
 };
-

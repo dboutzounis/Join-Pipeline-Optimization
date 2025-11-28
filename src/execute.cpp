@@ -1,8 +1,8 @@
+#include <column_t.h>
 #include <hardware.h>
 #include <hash_algo.h>
 #include <inner_column.h>
 #include <materialization.h>
-#include <column_t.h>
 #include <plan.h>
 #include <table.h>
 
@@ -30,7 +30,7 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
         namespace views = ranges::views;
-        HASH_ALGO_TYPE <T, std::vector<size_t>> hash_table;
+        HASH_ALGO_TYPE<T, std::vector<size_t>> hash_table;
         if (build_left) {
             for (size_t idx = 0; idx < left[0].total_size; idx++) {
                 value_t val = left[left_col].get_at(idx);
@@ -46,7 +46,7 @@ struct JoinAlgorithm {
                     itr_vec.push_back(idx);
                 }
             }
-            for (size_t right_idx = 0 ; right_idx < right[0].total_size; right_idx++) {
+            for (size_t right_idx = 0; right_idx < right[0].total_size; right_idx++) {
                 auto smart_key = extract_key<T>(right[right_col].get_at(right_idx));
                 if (!smart_key) continue;
                 const T& key = *smart_key;
@@ -60,12 +60,10 @@ struct JoinAlgorithm {
                                 results[out_idx++].push_back(right[col_idx - left.size()].get_at(right_idx));
                             }
                         }
-        
                     }
                 }
             }
         } else {
-
             for (size_t idx = 0; idx < right[0].total_size; idx++) {
                 value_t val = right[right_col].get_at(idx);
                 auto smart_key = extract_key<T>(val);
@@ -95,7 +93,7 @@ struct JoinAlgorithm {
                 }
             }
         }
-    }   
+    }
 };
 
 template <>
@@ -122,7 +120,7 @@ ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const st
     auto& right_types = right_node.output_attrs;
     auto left = execute_impl(plan, left_idx);
     auto right = execute_impl(plan, right_idx);
-    std::vector<Column_t> results(output_attrs.size());
+    ExecuteResult results(output_attrs.size());
 
     JoinAlgorithm join_algorithm{.build_left = join.build_left,
                                  .plan = plan,
@@ -161,10 +159,10 @@ bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
     return bitmap[byte_idx] & (1u << bit);
 }
 
-std::vector<Column_t> copy_scan_materialization(const Plan& plan, const ColumnarTable& table,
-                                                            const std::vector<std::tuple<size_t, DataType>>& output_attrs, uint8_t table_id) {
+ExecuteResult copy_scan_materialization(const Plan& plan, const ColumnarTable& table, const std::vector<std::tuple<size_t, DataType>>& output_attrs,
+                                        uint8_t table_id) {
     namespace views = ranges::views;
-    std::vector<Column_t> results(output_attrs.size() ,Column_t(table.num_rows));
+    ExecuteResult results(output_attrs.size(), Column_t(table.num_rows));
     std::vector<DataType> types(table.columns.size());
     auto task = [&](size_t begin, size_t end) {
         size_t col_pap = 0;
@@ -187,8 +185,7 @@ std::vector<Column_t> copy_scan_materialization(const Plan& plan, const Columnar
                                 results[column_idx].push_back(value_t::from_int32(value));
                             } else {
                                 results[column_idx].push_back(value_t::null_value());
-                            } 
-                           
+                            }
                         }
                         break;
                     }
@@ -215,14 +212,13 @@ std::vector<Column_t> copy_scan_materialization(const Plan& plan, const Columnar
                                     auto offset = offset_begin[data_idx];
                                     std::string value{string_begin, data_begin + offset};
                                     string_begin = data_begin + offset;
-                        
+
                                     Smart_string smart_string;
                                     smart_string = Smart_string::encode(table_id, in_col_idx, page_id, data_idx++);
                                     results[column_idx].push_back(value_t::from_string(smart_string));
                                 } else {
                                     results[column_idx].push_back(value_t::null_value());
                                 }
-                              
                             }
                         }
                         break;
@@ -297,7 +293,7 @@ ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const s
                     data.clear();
                     bitmap.clear();
                 };
-                for (size_t index  = 0 ; index < result[col_idx].total_size ;index++) {
+                for (size_t index = 0; index < result[col_idx].total_size; index++) {
                     auto value = result[col_idx].get_at(index);
                     if (value.get_type() == ValueType::INT32) {
                         if (4 + (data.size() + 1) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
@@ -356,7 +352,7 @@ ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const s
                     offsets.clear();
                     bitmap.clear();
                 };
-                for (size_t index  = 0 ; index < result[col_idx].total_size ; index++) {
+                for (size_t index = 0; index < result[col_idx].total_size; index++) {
                     auto value = result[col_idx].get_at(index);
                     if (value.get_type() == ValueType::SMART_STRING) {
                         std::string str = value.get_string().get_value(plan);
