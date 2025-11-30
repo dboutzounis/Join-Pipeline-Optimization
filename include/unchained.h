@@ -1,6 +1,12 @@
 #pragma once
 
-#include <zlib.h>
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#define USE_X86_CRC 1
+#elif defined(__aarch64__)
+#include <arm_acle.h>
+#define USE_ARM_CRC 1
+#endif
 
 #include <cstdint>
 #include <functional>
@@ -8,9 +14,17 @@
 #include <random>
 #include <vector>
 
-uint64_t hash32(const uint32_t& key, const uint32_t& seed) {
+inline uint32_t fast_crc32_u32(uint32_t seed, uint32_t key) {
+#ifdef USE_X86_CRC
+    return _mm_crc32_u32(seed, key);
+#elif defined(USE_ARM_CRC)
+    return __crc32w(seed, key);
+#endif
+}
+
+inline uint64_t hash32(const uint32_t& key, const uint32_t& seed) {
     uint64_t k = 0x8648DBDB;
-    uint32_t crc = crc32(seed, reinterpret_cast<const Bytef*>(&key), sizeof(key));
+    uint32_t crc = fast_crc32_u32(seed, key);
     return crc * ((k << 32) + 1);
 }
 
@@ -18,7 +32,6 @@ class Unchained {
     struct Bucket {
         int32_t key;
         size_t row_id;
-        bool occupied = false;
     };
 
     std::vector<uint64_t> directory;
@@ -61,27 +74,22 @@ class Unchained {
 
     void init_buffer(const size_t& size) { buffer.assign(size, Bucket{}); }
 
-    void init_directory(const std::vector<size_t>& count_vec, const size_t& vec_size) {
-        directory[0] |= static_cast<uint64_t>(count_vec[0]) << 16;
-        for (size_t i = 1; i < vec_size; i++) directory[i] |= ((directory[i - 1] >> 16) + count_vec[i]) << 16;
+    void init_directory(const std::vector<std::vector<size_t>>& count, const size_t& size) {
+        directory[0] |= static_cast<uint64_t>(count[0][0]) << 16;
+        for (size_t i = 1; i < size; i++) directory[i] |= ((directory[i - 1] >> 16) + count[i][0]) << 16;
     }
 
-    void insert(const int32_t& key, const size_t& row_id) {
+    void insert(const int32_t& key, const size_t& row_id, std::vector<std::vector<size_t>>& count) {
         uint64_t hash = hash32(key, 0L);
         uint64_t slot = hash >> shift;
         size_t start = slot != 0 ? directory[slot - 1] >> 16 : 0;
         size_t end = directory[slot] >> 16;
-        for (size_t i = start; i < end; i++) {
-            if (!buffer[i].occupied) {
-                buffer[i].key = std::move(key);
-                buffer[i].row_id = std::move(row_id);
-                buffer[i].occupied = true;
-                uint16_t tag_slot = static_cast<uint32_t>(hash) >> (32 - 11);
-                uint16_t tag = tags[tag_slot];
-                directory[slot] |= tag;
-                break;
-            }
-        }
+        buffer[start + count[slot][1]].key = std::move(key);
+        buffer[start + count[slot][1]].row_id = std::move(row_id);
+        count[slot][1]++;
+        uint16_t tag_slot = static_cast<uint32_t>(hash) >> (32 - 11);
+        uint16_t tag = tags[tag_slot];
+        directory[slot] |= tag;
     }
 
     std::vector<size_t> lookup(const int32_t& key, const uint64_t& hash) {

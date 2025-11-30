@@ -73,8 +73,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc|powerpc|ppc64|ppc64le")
 endif()
 FetchContent_MakeAvailable(duckdb)
 
-find_package(ZLIB REQUIRED)
-
 # Include all sources from /src directory. CONFIGURE_DEPENDS can be unreliable.
 # Try re-running cmake in case changes are not recognized.
 file(GLOB SIGMODPC_SRC
@@ -108,13 +106,13 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
 
     target_link_libraries(build_cache PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
     target_compile_definitions(build_cache PRIVATE TEAMOPT_USE_DUCKDB TEAMOPT_BUILD_CACHE)
-    target_link_libraries(fast PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser ZLIB::ZLIB)
+    target_link_libraries(fast PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser)
     target_include_directories(build_cache PRIVATE include)
     target_include_directories(fast PRIVATE include)
 
     function(add_fast_exec name algo)
         add_executable(${name} ${SIGMODPC_SRC} tests/read_sql.cpp)
-        target_link_libraries(${name} PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser ZLIB::ZLIB)
+        target_link_libraries(${name} PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser)
         target_compile_definitions(${name} PRIVATE HASH_ALGO_TYPE=${algo})
         target_include_directories(${name} PRIVATE include)
     endfunction()
@@ -125,10 +123,10 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     add_fast_exec(fast_cuckoo Cuckoo)
 endif()
 
-target_link_libraries(run PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb ZLIB::ZLIB)
+target_link_libraries(run PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
 target_compile_definitions(run PRIVATE TEAMOPT_USE_DUCKDB)
 target_link_libraries(build_database PRIVATE fmt duckdb)
-target_link_libraries(unit_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain ZLIB::ZLIB)
+target_link_libraries(unit_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain)
 
 target_include_directories(run PRIVATE include)
 target_include_directories(build_database PRIVATE include)
