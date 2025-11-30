@@ -5,6 +5,7 @@
 #include <materialization.h>
 #include <plan.h>
 #include <table.h>
+#include <unchained.h>
 
 namespace Contest {
 
@@ -30,8 +31,11 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
         namespace views = ranges::views;
-        HASH_ALGO_TYPE<T, std::vector<size_t>> hash_table;
+        Unchained hash_table;
+        // HASH_ALGO_TYPE<T, std::vector<size_t>> hash_table;
         if (build_left) {
+            size_t total_count = 0, vector_size = 1 << (64 - 48);
+            std::vector<size_t> count(vector_size, 0);
             for (size_t idx = 0; idx < left[0].total_size; idx++) {
                 value_t val = left[left_col].get_at(idx);
 
@@ -40,17 +44,34 @@ struct JoinAlgorithm {
 
                 const T& key = *smart_key;
 
-                if (auto& itr_vec = hash_table.find(key); itr_vec.size() == 0) {
-                    hash_table.emplace(key, std::vector<size_t>(1, idx));
-                } else {
-                    itr_vec.push_back(idx);
-                }
+                uint64_t hash_value = hash32(static_cast<int32_t>(key), 0L);
+                hash_value >>= 48;
+                count[hash_value]++;
+                total_count++;
+
+                // if (auto& itr_vec = hash_table.find(key); itr_vec.size() == 0) {
+                //     hash_table.emplace(key, std::vector<size_t>(1, idx));
+                // } else {
+                //     itr_vec.push_back(idx);
+                // }
+            }
+            hash_table.init_buffer(total_count);
+            hash_table.init_directory(count, vector_size);
+            for (size_t idx = 0; idx < left[0].total_size; idx++) {
+                value_t val = left[left_col].get_at(idx);
+
+                auto smart_key = extract_key<T>(val);
+                if (!smart_key) continue;
+
+                const T& key = *smart_key;
+                hash_table.insert(static_cast<int32_t>(key), idx);
             }
             for (size_t right_idx = 0; right_idx < right[0].total_size; right_idx++) {
                 auto smart_key = extract_key<T>(right[right_col].get_at(right_idx));
                 if (!smart_key) continue;
                 const T& key = *smart_key;
-                if (auto& itr_vec = hash_table.find(key); itr_vec.size() != 0) {
+                uint64_t hash_value = hash32(static_cast<int32_t>(key), 0L);
+                if (auto itr_vec = hash_table.lookup(static_cast<int32_t>(key), hash_value); itr_vec.size() != 0) {
                     for (auto left_idx : itr_vec) {
                         size_t out_idx = 0;
                         for (auto [col_idx, _] : output_attrs) {
@@ -64,22 +85,44 @@ struct JoinAlgorithm {
                 }
             }
         } else {
+            size_t total_count = 0, vector_size = 1 << (64 - 48);
+            std::vector<size_t> count(vector_size, 0);
             for (size_t idx = 0; idx < right[0].total_size; idx++) {
                 value_t val = right[right_col].get_at(idx);
+
                 auto smart_key = extract_key<T>(val);
                 if (!smart_key) continue;
+
                 const T& key = *smart_key;
-                if (auto& itr_vec = hash_table.find(key); itr_vec.size() == 0) {
-                    hash_table.emplace(key, std::vector<size_t>(1, idx));
-                } else {
-                    itr_vec.push_back(idx);
-                }
+
+                uint64_t hash_value = hash32(static_cast<int32_t>(key), 0L);
+                hash_value >>= 48;
+                count[hash_value]++;
+                total_count++;
+
+                // if (auto& itr_vec = hash_table.find(key); itr_vec.size() == 0) {
+                //     hash_table.emplace(key, std::vector<size_t>(1, idx));
+                // } else {
+                //     itr_vec.push_back(idx);
+                // }
+            }
+            hash_table.init_buffer(total_count);
+            hash_table.init_directory(count, vector_size);
+            for (size_t idx = 0; idx < right[0].total_size; idx++) {
+                value_t val = right[right_col].get_at(idx);
+
+                auto smart_key = extract_key<T>(val);
+                if (!smart_key) continue;
+
+                const T& key = *smart_key;
+                hash_table.insert(static_cast<int32_t>(key), idx);
             }
             for (size_t left_idx = 0; left_idx < left[0].total_size; left_idx++) {
                 auto smart_key = extract_key<T>(left[left_col].get_at(left_idx));
                 if (!smart_key) continue;
                 const T& key = *smart_key;
-                if (auto& itr_vec = hash_table.find(key); itr_vec.size() != 0) {
+                uint64_t hash_value = hash32(static_cast<int32_t>(key), 0L);
+                if (auto itr_vec = hash_table.lookup(static_cast<int32_t>(key), hash_value); itr_vec.size() != 0) {
                     for (auto right_idx : itr_vec) {
                         size_t out_idx = 0;
                         for (auto [col_idx, _] : output_attrs) {
@@ -103,13 +146,13 @@ inline std::optional<int32_t> JoinAlgorithm::extract_key<int32_t>(const value_t&
     return v.get_int32();
 }
 
-template <>
-inline std::optional<std::string> JoinAlgorithm::extract_key<std::string>(const value_t& v) const {
-    if (v.is_null()) return std::nullopt;
-    if (v.get_type() != ValueType::SMART_STRING) return std::nullopt;
-    Smart_string s = v.get_string();
-    return s.get_value(plan);
-}
+// template <>
+// inline std::optional<std::string> JoinAlgorithm::extract_key<std::string>(const value_t& v) const {
+//     if (v.is_null()) return std::nullopt;
+//     if (v.get_type() != ValueType::SMART_STRING) return std::nullopt;
+//     Smart_string s = v.get_string();
+//     return s.get_value(plan);
+// }
 
 ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const std::vector<std::tuple<size_t, DataType>>& output_attrs) {
     auto left_idx = join.left;
@@ -130,25 +173,27 @@ ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const st
                                  .left_col = join.left_attr,
                                  .right_col = join.right_attr,
                                  .output_attrs = output_attrs};
-    if (join.build_left) {
-        switch (std::get<1>(left_types[join.left_attr])) {
-            case DataType::INT32:
-                join_algorithm.run<int32_t>();
-                break;
-            case DataType::VARCHAR:
-                join_algorithm.run<std::string>();
-                break;
-        }
-    } else {
-        switch (std::get<1>(right_types[join.right_attr])) {
-            case DataType::INT32:
-                join_algorithm.run<int32_t>();
-                break;
-            case DataType::VARCHAR:
-                join_algorithm.run<std::string>();
-                break;
-        }
-    }
+    // if (join.build_left) {
+    //     switch (std::get<1>(left_types[join.left_attr])) {
+    //         case DataType::INT32:
+    //             join_algorithm.run<int32_t>();
+    //             break;
+    //         case DataType::VARCHAR:
+    //             join_algorithm.run<std::string>();
+    //             break;
+    //     }
+    // } else {
+    //     switch (std::get<1>(right_types[join.right_attr])) {
+    //         case DataType::INT32:
+    //             join_algorithm.run<int32_t>();
+    //             break;
+    //         case DataType::VARCHAR:
+    //             join_algorithm.run<std::string>();
+    //             break;
+    //     }
+    // }
+
+    join_algorithm.run<int32_t>();
 
     return results;
 }
