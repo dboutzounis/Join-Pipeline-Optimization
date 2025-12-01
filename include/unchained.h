@@ -22,7 +22,7 @@ inline uint32_t fast_crc32_u32(uint32_t seed, uint32_t key) {
 #endif
 }
 
-inline uint64_t hash32(const uint32_t& key, const uint32_t& seed) {
+inline uint64_t hash32(uint32_t key, uint32_t seed) {
     uint64_t k = 0x8648DBDB;
     uint32_t crc = fast_crc32_u32(seed, key);
     return crc * ((k << 32) + 1);
@@ -38,14 +38,16 @@ class Unchained {
     std::vector<Bucket> buffer;
     uint64_t shift;
     uint16_t tags[2048];
+    std::vector<std::vector<size_t>> count;
+    size_t total_count;
 
-    bool could_contain(const uint16_t& entry, const uint64_t& hash) {
+    inline bool could_contain(uint16_t entry, uint64_t hash) {
         uint16_t slot = static_cast<uint32_t>(hash) >> (32 - 11);
         uint16_t tag = tags[slot];
         return !(tag & ~entry);
     }
 
-    std::vector<size_t> produce_matches(const int32_t& key, const uint64_t& slot, const uint64_t& entry) {
+    inline std::vector<size_t> produce_matches(int32_t key, uint64_t slot, uint64_t entry) {
         std::vector<size_t> matches;
         size_t start = slot != 0 ? directory[slot - 1] >> 16 : 0;
         size_t end = entry >> 16;
@@ -55,10 +57,10 @@ class Unchained {
     }
 
    public:
-    Unchained(uint64_t shift = 48) {
+    Unchained(uint64_t shift = 48) : total_count(0) {
         this->shift = shift;
         directory.assign(1 << (64 - shift), 0);
-
+        count.assign(1 << (64 - shift), std::vector<size_t>(2, 0));
         size_t k = 0;
         for (uint32_t i = 0; i < 65536; i++) {
             if (__builtin_popcount(i) == 4) {
@@ -72,14 +74,20 @@ class Unchained {
         while (k < 2048) tags[k++] = tags[dist(rng)];
     }
 
-    void init_buffer(const size_t& size) { buffer.assign(size, Bucket{}); }
-
-    void init_directory(const std::vector<std::vector<size_t>>& count, const size_t& size) {
-        directory[0] |= static_cast<uint64_t>(count[0][0]) << 16;
-        for (size_t i = 1; i < size; i++) directory[i] |= ((directory[i - 1] >> 16) + count[i][0]) << 16;
+    inline void key_count(int32_t key) {
+        uint64_t hash_value = hash32(key, 0L);
+        hash_value >>= shift;
+        count[hash_value][0]++;
+        total_count++;
     }
 
-    void insert(const int32_t& key, const size_t& row_id, std::vector<std::vector<size_t>>& count) {
+    void build() {
+        buffer.assign(total_count, Bucket{});
+        directory[0] |= static_cast<uint64_t>(count[0][0]) << 16;
+        for (size_t i = 1; i < count.size(); i++) directory[i] |= ((directory[i - 1] >> 16) + count[i][0]) << 16;
+    }
+
+    inline void insert(int32_t key, size_t row_id) {
         uint64_t hash = hash32(key, 0L);
         uint64_t slot = hash >> shift;
         size_t start = slot != 0 ? directory[slot - 1] >> 16 : 0;
@@ -92,7 +100,8 @@ class Unchained {
         directory[slot] |= tag;
     }
 
-    std::vector<size_t> lookup(const int32_t& key, const uint64_t& hash) {
+    std::vector<size_t> lookup(int32_t key) {
+        uint64_t hash = hash32(key, 0L);
         uint64_t slot = hash >> shift;
         uint64_t entry = directory[slot];
         if (!could_contain(static_cast<uint16_t>(entry), hash)) {

@@ -32,92 +32,44 @@ struct JoinAlgorithm {
     auto run() {
         namespace views = ranges::views;
         Unchained hash_table;
-        if (build_left) {
-            size_t total_count = 0, vector_size = 1 << (64 - 48);
-            std::vector<std::vector<size_t>> count(vector_size, std::vector<size_t>(2, 0));
-            for (size_t idx = 0; idx < left[0].total_size; idx++) {
-                value_t val = left[left_col].get_at(idx);
+        ExecuteResult& build_table = build_left ? left : right;
+        ExecuteResult& probe_table = build_left ? right : left;
+        size_t build_col = build_left ? left_col : right_col;
+        size_t probe_col = build_left ? right_col : left_col;
 
-                auto smart_key = extract_key<T>(val);
-                if (!smart_key) continue;
+        for (size_t idx = 0; idx < build_table[0].total_size; idx++) {
+            value_t val = build_table[build_col].get_at(idx);
 
-                const T& key = *smart_key;
+            auto smart_key = extract_key<T>(val);
+            if (!smart_key) continue;
 
-                uint64_t hash_value = hash32(static_cast<int32_t>(key), 0L);
-                hash_value >>= 48;
-                count[hash_value][0]++;
-                total_count++;
-            }
-            hash_table.init_buffer(total_count);
-            hash_table.init_directory(count, vector_size);
-            for (size_t idx = 0; idx < left[0].total_size; idx++) {
-                value_t val = left[left_col].get_at(idx);
+            const T& key = *smart_key;
+            hash_table.key_count(static_cast<int32_t>(key));
+        }
+        hash_table.build();
+        for (size_t idx = 0; idx < build_table[0].total_size; idx++) {
+            value_t val = build_table[build_col].get_at(idx);
 
-                auto smart_key = extract_key<T>(val);
-                if (!smart_key) continue;
+            auto smart_key = extract_key<T>(val);
+            if (!smart_key) continue;
 
-                const T& key = *smart_key;
-                hash_table.insert(static_cast<int32_t>(key), idx, count);
-            }
-            for (size_t right_idx = 0; right_idx < right[0].total_size; right_idx++) {
-                auto smart_key = extract_key<T>(right[right_col].get_at(right_idx));
-                if (!smart_key) continue;
-                const T& key = *smart_key;
-                uint64_t hash_value = hash32(static_cast<int32_t>(key), 0L);
-                if (auto itr_vec = hash_table.lookup(static_cast<int32_t>(key), hash_value); itr_vec.size() != 0) {
-                    for (auto left_idx : itr_vec) {
-                        size_t out_idx = 0;
-                        for (auto [col_idx, _] : output_attrs) {
-                            if (col_idx < left.size()) {
-                                results[out_idx++].push_back(left[col_idx].get_at(left_idx));
-                            } else {
-                                results[out_idx++].push_back(right[col_idx - left.size()].get_at(right_idx));
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            size_t total_count = 0, vector_size = 1 << (64 - 48);
-            std::vector<std::vector<size_t>> count(vector_size, std::vector<size_t>(2, 0));
-            for (size_t idx = 0; idx < right[0].total_size; idx++) {
-                value_t val = right[right_col].get_at(idx);
-
-                auto smart_key = extract_key<T>(val);
-                if (!smart_key) continue;
-
-                const T& key = *smart_key;
-
-                uint64_t hash_value = hash32(static_cast<int32_t>(key), 0L);
-                hash_value >>= 48;
-                count[hash_value][0]++;
-                total_count++;
-            }
-            hash_table.init_buffer(total_count);
-            hash_table.init_directory(count, vector_size);
-            for (size_t idx = 0; idx < right[0].total_size; idx++) {
-                value_t val = right[right_col].get_at(idx);
-
-                auto smart_key = extract_key<T>(val);
-                if (!smart_key) continue;
-
-                const T& key = *smart_key;
-                hash_table.insert(static_cast<int32_t>(key), idx, count);
-            }
-            for (size_t left_idx = 0; left_idx < left[0].total_size; left_idx++) {
-                auto smart_key = extract_key<T>(left[left_col].get_at(left_idx));
-                if (!smart_key) continue;
-                const T& key = *smart_key;
-                uint64_t hash_value = hash32(static_cast<int32_t>(key), 0L);
-                if (auto itr_vec = hash_table.lookup(static_cast<int32_t>(key), hash_value); itr_vec.size() != 0) {
-                    for (auto right_idx : itr_vec) {
-                        size_t out_idx = 0;
-                        for (auto [col_idx, _] : output_attrs) {
-                            if (col_idx < left.size()) {
-                                results[out_idx++].push_back(left[col_idx].get_at(left_idx));
-                            } else {
-                                results[out_idx++].push_back(right[col_idx - left.size()].get_at(right_idx));
-                            }
+            const T& key = *smart_key;
+            hash_table.insert(static_cast<int32_t>(key), idx);
+        }
+        for (size_t probe_idx = 0; probe_idx < probe_table[0].total_size; probe_idx++) {
+            auto smart_key = extract_key<T>(probe_table[probe_col].get_at(probe_idx));
+            if (!smart_key) continue;
+            const T& key = *smart_key;
+            if (auto itr_vec = hash_table.lookup(static_cast<int32_t>(key)); itr_vec.size() != 0) {
+                for (auto build_idx : itr_vec) {
+                    size_t out_idx = 0;
+                    for (auto [col_idx, _] : output_attrs) {
+                        if (col_idx < left.size()) {
+                            size_t row = build_left ? build_idx : probe_idx;
+                            results[out_idx++].push_back(left[col_idx].get_at(row));
+                        } else {
+                            size_t row = build_left ? probe_idx : build_idx;
+                            results[out_idx++].push_back(right[col_idx - left.size()].get_at(row));
                         }
                     }
                 }
