@@ -74,6 +74,12 @@ class Unchained {
         while (k < 2048) tags[k++] = tags[dist(rng)];
     }
 
+    inline std::vector<uint64_t>& get_directory() { return directory; }
+
+    inline std::vector<Bucket>& get_buffer() { return buffer; }
+
+    inline uint16_t* get_tags() { return tags; }
+
     inline void key_count(int32_t key) {
         uint64_t hash_value = hash32(key, 0L);
         hash_value >>= shift;
