@@ -5,8 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <thread>
-
 #include "hash_algo.h"
+#include "materialization.h"
 
 void sort(std::vector<std::vector<Data>>& table) { std::sort(table.begin(), table.end()); }
 
@@ -994,3 +994,61 @@ TEST_CASE("Cuckoo rehash timeout detection (non-blocking)", "[cuckoo][cuckoo_cir
     else
         FAIL("emplace() returned unexpectedly — rehash completed (or fixed");
 }
+
+TEST_CASE("Smart_string encoding and decoding fields", "[smart_string]") {
+    uint32_t table_id = 42;
+    uint32_t column_id = 7;
+    uint32_t page_id = 1337;
+    uint32_t offset_idx = 123;
+
+    Smart_string ss = Smart_string::encode(table_id, column_id, page_id, offset_idx);
+
+    REQUIRE(ss.get_table_id() == table_id);
+    REQUIRE(ss.get_column_id() == column_id);
+    REQUIRE(ss.get_page_id() == page_id);
+    REQUIRE(ss.get_offset_idx() == offset_idx);
+}
+
+TEST_CASE("value_t default is NULL", "[value_t]") {
+    value_t v;
+    REQUIRE(v.is_null());
+    REQUIRE(v.get_type() == ValueType::NONE);
+}
+
+TEST_CASE("value_t stores and retrieves int32 correctly", "[value_t][int]") {
+    int32_t original = 123456;
+
+    value_t v = value_t::from_int32(original);
+
+    REQUIRE(v.get_type() == ValueType::INT32);
+    REQUIRE_FALSE(v.is_null());
+    REQUIRE(v.get_int32() == original);
+}
+
+TEST_CASE("value_t wraps Smart_string safely", "[value_t][smart_string]") {
+    uint32_t table_id = 7, col_id = 2, page_id = 100, off = 15;
+    Smart_string ss = Smart_string::encode(table_id, col_id, page_id, off);
+
+    value_t v = value_t::from_string(ss);
+
+    REQUIRE(v.get_type() == ValueType::SMART_STRING);
+
+    Smart_string decoded = v.get_string();
+
+    REQUIRE(decoded.get_table_id() == table_id);
+    REQUIRE(decoded.get_column_id() == col_id);
+    REQUIRE(decoded.get_page_id() == page_id);
+    REQUIRE(decoded.get_offset_idx() == off);
+}
+
+TEST_CASE("value_t preserves lower 2 bits as type mask", "[value_t][bitmask]") {
+    value_t vi = value_t::from_int32(42);
+    REQUIRE((vi.data & value_t::TYPE_MASK) == static_cast<uint64_t>(ValueType::INT32));
+
+    Smart_string ss = Smart_string::encode(10, 20, 30, 40);
+    value_t vs = value_t::from_string(ss);
+    REQUIRE((vs.data & value_t::TYPE_MASK) == static_cast<uint64_t>(ValueType::SMART_STRING));
+}
+
+
+
