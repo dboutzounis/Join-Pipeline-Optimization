@@ -8,6 +8,8 @@
 
 #include "column_t.h"
 #include "hash_algo.h"
+#include "materialization.h"
+#include "unchained.h"
 
 void sort(std::vector<std::vector<Data>>& table) { std::sort(table.begin(), table.end()); }
 
@@ -1143,5 +1145,196 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
         REQUIRE(col.get_at(0).get_int32() == 0);
         REQUIRE(col.get_at(PAGE_T_SIZE * 10 + 33).get_int32() == PAGE_T_SIZE * 10 + 33);
         REQUIRE(col.get_at(N - 1).get_int32() == N - 1);
+    }
+}
+
+TEST_CASE("Unchained basic key_count and build", "[unchained][unchained_build]") {
+    Unchained h(60);
+
+    h.key_count(5);
+    h.key_count(7);
+    h.key_count(13);
+
+    REQUIRE(h.get_buffer().empty());
+
+    h.build();
+
+    auto& dir = h.get_directory();
+    auto& buffer = h.get_buffer();
+
+    REQUIRE(buffer.size() == 3);
+
+    bool found3 = false;
+    for (size_t i = 0; i < dir.size(); i++) {
+        if ((dir[i] >> 16) == 3) {
+            found3 = true;
+            break;
+        }
+    }
+    REQUIRE(found3);
+}
+
+TEST_CASE("Unchained manual insertion and lookup", "[unchained][lookup_manual]") {
+    Unchained h(60);
+    auto& directory = h.get_directory();
+    auto& buffer = h.get_buffer();
+    auto* tags = h.get_tags();
+
+    buffer.resize(2);
+
+    int key1 = 10;
+    int key2 = 22;
+
+    size_t row1 = 111;
+    size_t row2 = 222;
+
+    uint64_t hash1 = hash32(key1, 0L);
+    uint64_t hash2 = hash32(key2, 0L);
+
+    uint64_t slot1 = hash1 >> 60;
+    uint64_t slot2 = hash2 >> 60;
+
+    buffer[0].key = key1;
+    buffer[0].row_id = row1;
+
+    buffer[1].key = key2;
+    buffer[1].row_id = row2;
+
+    directory.assign(directory.size(), 0);
+    directory[slot1] |= (1ULL << 16);
+    directory[slot2] |= (2ULL << 16);
+
+    uint16_t tag1 = tags[(uint32_t)hash1 >> (32 - 11)];
+    uint16_t tag2 = tags[(uint32_t)hash2 >> (32 - 11)];
+
+    directory[slot1] |= tag1;
+    directory[slot2] |= tag2;
+
+    SECTION("Lookup key1 finds correct row") {
+        auto result = h.lookup(key1);
+        REQUIRE(result.size() == 1);
+        REQUIRE(result[0] == row1);
+    }
+
+    SECTION("Lookup key2 finds correct row") {
+        auto result = h.lookup(key2);
+        REQUIRE(result.size() == 1);
+        REQUIRE(result[0] == row2);
+    }
+
+    SECTION("Lookup of non-existing key returns empty") {
+        int missing = 9999;
+        auto result = h.lookup(missing);
+        REQUIRE(result.empty());
+    }
+
+    SECTION("Lookup fails when tags do not match") {
+        directory[slot1] &= 0xFFFFFFFFFFFF0000ULL;
+        auto result = h.lookup(key1);
+        REQUIRE(result.empty());
+    }
+}
+
+TEST_CASE("Unchained basic insert (no collisions)", "[unchained][unchained_insert]") {
+    Unchained h(60);
+    h.key_count(7);
+    h.key_count(20);
+    h.build();
+
+    h.insert(7, 100);
+    h.insert(20, 200);
+
+    auto r1 = h.lookup(7);
+    REQUIRE(r1.size() == 1);
+    REQUIRE(r1[0] == 100);
+
+    auto r2 = h.lookup(20);
+    REQUIRE(r2.size() == 1);
+    REQUIRE(r2[0] == 200);
+
+    auto r3 = h.lookup(99999);
+    REQUIRE(r3.empty());
+}
+
+TEST_CASE("Unchained multiple inserts into same slot (collision behavior)", "[unchained][unchained_collision]") {
+    Unchained h(48);
+
+    h.key_count(5);
+    h.key_count(5);
+    h.key_count(21);
+
+    h.build();
+
+    h.insert(5, 1);
+    h.insert(5, 2);
+    h.insert(21, 7);
+
+    auto r1 = h.lookup(5);
+    REQUIRE(r1.size() == 2);
+    REQUIRE(r1[0] == 1);
+    REQUIRE(r1[1] == 2);
+
+    auto r3 = h.lookup(21);
+    REQUIRE(r3.size() == 1);
+    REQUIRE(r3[0] == 7);
+
+    auto r4 = h.lookup(99999);
+    REQUIRE(r4.empty());
+}
+
+TEST_CASE("Unchained tag filtering avoids unnecessary scans", "[unchained][unchained_tags]") {
+    Unchained h(50);
+
+    h.key_count(10);
+    h.build();
+    h.insert(10, 20);
+
+    auto& dir = h.get_directory();
+    auto* tags = h.get_tags();
+
+    uint64_t hash10 = hash32(10, 0L);
+    uint64_t slot = hash10 >> 50;
+    uint16_t slot_tag = tags[static_cast<uint32_t>(hash10) >> (32 - 11)];
+
+    REQUIRE((dir[slot] & slot_tag) == slot_tag);
+
+    auto r = h.lookup(10);
+    REQUIRE(r.size() == 1);
+    REQUIRE(r[0] == 20);
+}
+
+TEST_CASE("Unchained insertion order is preserved inside slots", "[unchained][unchained_buffer_order]") {
+    Unchained h(56);
+
+    h.key_count(10);
+    h.key_count(10);
+    h.key_count(10);
+
+    h.build();
+
+    h.insert(10, 100);
+    h.insert(10, 200);
+    h.insert(10, 300);
+
+    auto r = h.lookup(10);
+    REQUIRE(r.size() == 3);
+    REQUIRE(r[0] == 100);
+    REQUIRE(r[1] == 200);
+    REQUIRE(r[2] == 300);
+}
+
+TEST_CASE("Unchained works with many keys (stress small)", "[unchained][unchained_stress_small]") {
+    Unchained h(60);
+
+    for (int i = 0; i < 100; i++) h.key_count(i);
+
+    h.build();
+
+    for (int i = 0; i < 100; i++) h.insert(i, i * 10);
+
+    for (int i = 0; i < 100; i++) {
+        auto r = h.lookup(i);
+        REQUIRE(r.size() == 1);
+        REQUIRE(r[0] == i * 10);
     }
 }

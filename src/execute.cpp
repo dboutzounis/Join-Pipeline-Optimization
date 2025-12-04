@@ -5,6 +5,7 @@
 #include <materialization.h>
 #include <plan.h>
 #include <table.h>
+#include <unchained.h>
 
 namespace Contest {
 
@@ -30,64 +31,45 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
         namespace views = ranges::views;
-        HASH_ALGO_TYPE<T, std::vector<size_t>> hash_table;
-        if (build_left) {
-            for (size_t idx = 0; idx < left[0].total_size; idx++) {
-                value_t val = left[left_col].get_at(idx);
+        Unchained hash_table;
+        ExecuteResult& build_table = build_left ? left : right;
+        ExecuteResult& probe_table = build_left ? right : left;
+        size_t build_col = build_left ? left_col : right_col;
+        size_t probe_col = build_left ? right_col : left_col;
 
-                auto smart_key = extract_key<T>(val);
-                if (!smart_key) continue;
+        for (size_t idx = 0; idx < build_table[0].total_size; idx++) {
+            value_t val = build_table[build_col].get_at(idx);
 
-                const T& key = *smart_key;
+            auto smart_key = extract_key<T>(val);
+            if (!smart_key) continue;
 
-                if (auto& itr_vec = hash_table.find(key); itr_vec.size() == 0) {
-                    hash_table.emplace(key, std::vector<size_t>(1, idx));
-                } else {
-                    itr_vec.push_back(idx);
-                }
-            }
-            for (size_t right_idx = 0; right_idx < right[0].total_size; right_idx++) {
-                auto smart_key = extract_key<T>(right[right_col].get_at(right_idx));
-                if (!smart_key) continue;
-                const T& key = *smart_key;
-                if (auto& itr_vec = hash_table.find(key); itr_vec.size() != 0) {
-                    for (auto left_idx : itr_vec) {
-                        size_t out_idx = 0;
-                        for (auto [col_idx, _] : output_attrs) {
-                            if (col_idx < left.size()) {
-                                results[out_idx++].push_back(left[col_idx].get_at(left_idx));
-                            } else {
-                                results[out_idx++].push_back(right[col_idx - left.size()].get_at(right_idx));
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            for (size_t idx = 0; idx < right[0].total_size; idx++) {
-                value_t val = right[right_col].get_at(idx);
-                auto smart_key = extract_key<T>(val);
-                if (!smart_key) continue;
-                const T& key = *smart_key;
-                if (auto& itr_vec = hash_table.find(key); itr_vec.size() == 0) {
-                    hash_table.emplace(key, std::vector<size_t>(1, idx));
-                } else {
-                    itr_vec.push_back(idx);
-                }
-            }
-            for (size_t left_idx = 0; left_idx < left[0].total_size; left_idx++) {
-                auto smart_key = extract_key<T>(left[left_col].get_at(left_idx));
-                if (!smart_key) continue;
-                const T& key = *smart_key;
-                if (auto& itr_vec = hash_table.find(key); itr_vec.size() != 0) {
-                    for (auto right_idx : itr_vec) {
-                        size_t out_idx = 0;
-                        for (auto [col_idx, _] : output_attrs) {
-                            if (col_idx < left.size()) {
-                                results[out_idx++].push_back(left[col_idx].get_at(left_idx));
-                            } else {
-                                results[out_idx++].push_back(right[col_idx - left.size()].get_at(right_idx));
-                            }
+            const T& key = *smart_key;
+            hash_table.key_count(static_cast<int32_t>(key));
+        }
+        hash_table.build();
+        for (size_t idx = 0; idx < build_table[0].total_size; idx++) {
+            value_t val = build_table[build_col].get_at(idx);
+
+            auto smart_key = extract_key<T>(val);
+            if (!smart_key) continue;
+
+            const T& key = *smart_key;
+            hash_table.insert(static_cast<int32_t>(key), idx);
+        }
+        for (size_t probe_idx = 0; probe_idx < probe_table[0].total_size; probe_idx++) {
+            auto smart_key = extract_key<T>(probe_table[probe_col].get_at(probe_idx));
+            if (!smart_key) continue;
+            const T& key = *smart_key;
+            if (auto itr_vec = hash_table.lookup(static_cast<int32_t>(key)); itr_vec.size() != 0) {
+                for (auto build_idx : itr_vec) {
+                    size_t out_idx = 0;
+                    for (auto [col_idx, _] : output_attrs) {
+                        if (col_idx < left.size()) {
+                            size_t row = build_left ? build_idx : probe_idx;
+                            results[out_idx++].push_back(left[col_idx].get_at(row));
+                        } else {
+                            size_t row = build_left ? probe_idx : build_idx;
+                            results[out_idx++].push_back(right[col_idx - left.size()].get_at(row));
                         }
                     }
                 }
@@ -103,14 +85,6 @@ inline std::optional<int32_t> JoinAlgorithm::extract_key<int32_t>(const value_t&
     return v.get_int32();
 }
 
-template <>
-inline std::optional<std::string> JoinAlgorithm::extract_key<std::string>(const value_t& v) const {
-    if (v.is_null()) return std::nullopt;
-    if (v.get_type() != ValueType::SMART_STRING) return std::nullopt;
-    Smart_string s = v.get_string();
-    return s.get_value(plan);
-}
-
 ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const std::vector<std::tuple<size_t, DataType>>& output_attrs) {
     auto left_idx = join.left;
     auto right_idx = join.right;
@@ -120,7 +94,7 @@ ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const st
     auto& right_types = right_node.output_attrs;
     auto left = execute_impl(plan, left_idx);
     auto right = execute_impl(plan, right_idx);
-    std::vector<Column_t> results(output_attrs.size());
+    ExecuteResult results(output_attrs.size());
 
     JoinAlgorithm join_algorithm{.build_left = join.build_left,
                                  .plan = plan,
@@ -130,25 +104,8 @@ ExecuteResult execute_hash_join(const Plan& plan, const JoinNode& join, const st
                                  .left_col = join.left_attr,
                                  .right_col = join.right_attr,
                                  .output_attrs = output_attrs};
-    if (join.build_left) {
-        switch (std::get<1>(left_types[join.left_attr])) {
-            case DataType::INT32:
-                join_algorithm.run<int32_t>();
-                break;
-            case DataType::VARCHAR:
-                join_algorithm.run<std::string>();
-                break;
-        }
-    } else {
-        switch (std::get<1>(right_types[join.right_attr])) {
-            case DataType::INT32:
-                join_algorithm.run<int32_t>();
-                break;
-            case DataType::VARCHAR:
-                join_algorithm.run<std::string>();
-                break;
-        }
-    }
+
+    join_algorithm.run<int32_t>();
 
     return results;
 }
@@ -159,10 +116,10 @@ bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
     return bitmap[byte_idx] & (1u << bit);
 }
 
-std::vector<Column_t> copy_scan_materialization(const Plan& plan, const ColumnarTable& table, const std::vector<std::tuple<size_t, DataType>>& output_attrs,
-                                                uint8_t table_id) {
+ExecuteResult copy_scan_materialization(const Plan& plan, const ColumnarTable& table, const std::vector<std::tuple<size_t, DataType>>& output_attrs,
+                                        uint8_t table_id) {
     namespace views = ranges::views;
-    std::vector<Column_t> results(output_attrs.size(), Column_t(table.num_rows));
+    ExecuteResult results(output_attrs.size(), Column_t(table.num_rows));
     std::vector<DataType> types(table.columns.size());
     auto task = [&](size_t begin, size_t end) {
         size_t col_pap = 0;
