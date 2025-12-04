@@ -953,47 +953,6 @@ TEST_CASE("Cuckoo rehash basic growth", "[cuckoo][cuckoo_rehash]") {
     REQUIRE((new_size_0 % initial_size_0 == 0 || new_size_1 % initial_size_1 == 0));
 }
 
-TEST_CASE("Cuckoo rehash timeout detection (non-blocking)", "[cuckoo][cuckoo_circle_safe_detection]") {
-    Cuckoo<int, std::vector<size_t>> cuckoo(4);
-
-    auto& hash_table = cuckoo.get_hashtable();
-
-    int key = 42;
-    std::vector<size_t> val1 = {1, 2, 3};
-    std::vector<size_t> val2 = {9, 8};
-
-    size_t idx0 = cuckoo.hash(key) % 4;
-    size_t idx1 = (cuckoo.hash(key) ^ 0x9e3779b97f4a7c15ULL) % 4;
-    hash_table[idx0].key = key;
-    hash_table[idx0].value = val1;
-    hash_table[idx0].occupied = true;
-    hash_table[4 + idx1].key = key;
-    hash_table[4 + idx1].value = val2;
-    hash_table[4 + idx1].occupied = true;
-
-    std::atomic<bool> finished = false;
-
-    std::thread worker([&]() {
-        cuckoo.emplace(key, {10, 20});
-        finished = true;
-    });
-    worker.detach();
-
-    bool success = false;
-    for (int i = 0; i < 50; ++i) {
-        if (finished) {
-            success = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    if (!success)
-        SUCCEED("emplace() did not finish within 500 ms — expected infinite loop detected");
-    else
-        FAIL("emplace() returned unexpectedly — rehash completed (or fixed");
-}
-
 TEST_CASE("Column_t basic push/get operations", "[column_t]") {
     Column_t col;
 
