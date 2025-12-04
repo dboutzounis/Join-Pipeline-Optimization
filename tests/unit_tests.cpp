@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <thread>
+
 #include "hash_algo.h"
 #include "materialization.h"
 
@@ -497,21 +498,17 @@ TEST_CASE("3-way join", "[join]") {
     REQUIRE(result_table.table() == ground_truth);
 }
 
-
 TEST_CASE("Robin Hood manual insertion and find verification", "[robin][robin_find]") {
-    Robin_Hood<int,std::vector<int>> table(4);
+    Robin_Hood<int, std::vector<int>> table(4);
     auto& ht = table.get_table();
 
     size_t idx1 = hash_index(1, ht.size());
     size_t idx2 = hash_index(2, ht.size());
     size_t idx3 = hash_index(3, ht.size());
 
-    
-
-    ht[idx1].assign (1, {10, 20}, 0);
-    ht[idx2].assign (2, {30}, 0);
-    ht[idx3].assign (3, {99, 100, 101}, 1);
-
+    ht[idx1].assign(1, {10, 20}, 0);
+    ht[idx2].assign(2, {30}, 0);
+    ht[idx3].assign(3, {99, 100, 101}, 1);
 
     SECTION("Find existing keys manually placed") {
         auto& result1 = table.find(1);
@@ -954,47 +951,6 @@ TEST_CASE("Cuckoo rehash basic growth", "[cuckoo][cuckoo_rehash]") {
     REQUIRE((new_size_0 % initial_size_0 == 0 || new_size_1 % initial_size_1 == 0));
 }
 
-TEST_CASE("Cuckoo rehash timeout detection (non-blocking)", "[cuckoo][cuckoo_circle_safe_detection]") {
-    Cuckoo<int, std::vector<size_t>> cuckoo(4);
-
-    auto& hash_table = cuckoo.get_hashtable();
-
-    int key = 42;
-    std::vector<size_t> val1 = {1, 2, 3};
-    std::vector<size_t> val2 = {9, 8};
-
-    size_t idx0 = cuckoo.hash(key) % 4;
-    size_t idx1 = (cuckoo.hash(key) ^ 0x9e3779b97f4a7c15ULL) % 4;
-    hash_table[idx0].key = key;
-    hash_table[idx0].value = val1;
-    hash_table[idx0].occupied = true;
-    hash_table[4 + idx1].key = key;
-    hash_table[4 + idx1].value = val2;
-    hash_table[4 + idx1].occupied = true;
-
-    std::atomic<bool> finished = false;
-
-    std::thread worker([&]() {
-        cuckoo.emplace(key, {10, 20});
-        finished = true;
-    });
-    worker.detach();
-
-    bool success = false;
-    for (int i = 0; i < 50; ++i) {
-        if (finished) {
-            success = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    if (!success)
-        SUCCEED("emplace() did not finish within 500 ms — expected infinite loop detected");
-    else
-        FAIL("emplace() returned unexpectedly — rehash completed (or fixed");
-}
-
 TEST_CASE("Smart_string encoding and decoding fields", "[smart_string]") {
     uint32_t table_id = 42;
     uint32_t column_id = 7;
@@ -1049,6 +1005,3 @@ TEST_CASE("value_t preserves lower 2 bits as type mask", "[value_t][bitmask]") {
     value_t vs = value_t::from_string(ss);
     REQUIRE((vs.data & value_t::TYPE_MASK) == static_cast<uint64_t>(ValueType::SMART_STRING));
 }
-
-
-

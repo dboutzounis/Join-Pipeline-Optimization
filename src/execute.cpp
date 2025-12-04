@@ -185,7 +185,7 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
                                 if (row_idx >= table.num_rows) {
                                     throw std::runtime_error("row_idx");
                                 }
-                                results[row_idx++][column_idx] = value_t::from_int32(value);
+                                results[row_idx++][column_idx] = results[row_idx][column_idx].from_int32(value);
                             } else {
                                 ++row_idx;
                             }
@@ -202,8 +202,8 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
                             }
 
                             Smart_string smart_string;
-                            smart_string = Smart_string::encode(table_id, in_col_idx, page_id, 0);
-                            results[row_idx++][column_idx] = value_t::from_string(smart_string);
+                            smart_string = smart_string.encode(table_id, in_col_idx, page_id, 0);
+                            results[row_idx++][column_idx] = results[row_idx][column_idx].from_string(smart_string);
                         } else if (num_rows == 0xfffe) {
                             continue;
                         } else {
@@ -223,8 +223,8 @@ std::vector<std::vector<value_t>> copy_scan_materialization(const Plan& plan, co
                                     }
 
                                     Smart_string smart_string;
-                                    smart_string = Smart_string::encode(table_id, in_col_idx, page_id, data_idx++);
-                                    results[row_idx++][column_idx] = value_t::from_string(smart_string);
+                                    smart_string = smart_string.encode(table_id, in_col_idx, page_id, data_idx++);
+                                    results[row_idx++][column_idx] = results[row_idx][column_idx].from_string(smart_string);
                                 } else {
                                     ++row_idx;
                                 }
