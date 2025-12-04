@@ -6,8 +6,8 @@
 #include <chrono>
 #include <thread>
 
+#include "column_t.h"
 #include "hash_algo.h"
-#include "materialization.h"
 
 void sort(std::vector<std::vector<Data>>& table) { std::sort(table.begin(), table.end()); }
 
@@ -957,7 +957,7 @@ TEST_CASE("Smart_string encoding and decoding fields", "[smart_string]") {
     uint32_t page_id = 1337;
     uint32_t offset_idx = 123;
 
-    Smart_string ss = Smart_string::encode(table_id, column_id, page_id, offset_idx);
+    Smart_string ss = ss.encode(table_id, column_id, page_id, offset_idx);
 
     REQUIRE(ss.get_table_id() == table_id);
     REQUIRE(ss.get_column_id() == column_id);
@@ -974,7 +974,7 @@ TEST_CASE("value_t default is NULL", "[value_t]") {
 TEST_CASE("value_t stores and retrieves int32 correctly", "[value_t][int]") {
     int32_t original = 123456;
 
-    value_t v = value_t::from_int32(original);
+    value_t v = v.from_int32(original);
 
     REQUIRE(v.get_type() == ValueType::INT32);
     REQUIRE_FALSE(v.is_null());
@@ -983,9 +983,9 @@ TEST_CASE("value_t stores and retrieves int32 correctly", "[value_t][int]") {
 
 TEST_CASE("value_t wraps Smart_string safely", "[value_t][smart_string]") {
     uint32_t table_id = 7, col_id = 2, page_id = 100, off = 15;
-    Smart_string ss = Smart_string::encode(table_id, col_id, page_id, off);
+    Smart_string ss = ss.encode(table_id, col_id, page_id, off);
 
-    value_t v = value_t::from_string(ss);
+    value_t v = v.from_string(ss);
 
     REQUIRE(v.get_type() == ValueType::SMART_STRING);
 
@@ -998,10 +998,150 @@ TEST_CASE("value_t wraps Smart_string safely", "[value_t][smart_string]") {
 }
 
 TEST_CASE("value_t preserves lower 2 bits as type mask", "[value_t][bitmask]") {
-    value_t vi = value_t::from_int32(42);
+    value_t vi = vi.from_int32(42);
     REQUIRE((vi.data & value_t::TYPE_MASK) == static_cast<uint64_t>(ValueType::INT32));
 
-    Smart_string ss = Smart_string::encode(10, 20, 30, 40);
-    value_t vs = value_t::from_string(ss);
+    Smart_string ss = ss.encode(10, 20, 30, 40);
+    value_t vs = vs.from_string(ss);
     REQUIRE((vs.data & value_t::TYPE_MASK) == static_cast<uint64_t>(ValueType::SMART_STRING));
+}
+
+TEST_CASE("Column_t basic push/get operations", "[column_t]") {
+    Column_t col;
+    value_t v;
+
+    SECTION("Push and read values within a single page") {
+        for (int i = 0; i < 100; i++) {
+            col.push_back(v.from_int32(i));
+        }
+
+        REQUIRE(col.total_size == 100);
+
+        for (int i = 0; i < 100; i++) {
+            value_t v = col.get_at(i);
+            REQUIRE(v.get_int32() == i);
+        }
+    }
+
+    SECTION("Push across page boundary and read correctly") {
+        // Fill FULL first page
+        for (int i = 0; i < PAGE_T_SIZE; i++) {
+            col.push_back(v.from_int32(i));
+        }
+
+        // Push into second page
+        col.push_back(v.from_int32(9999));
+
+        REQUIRE(col.total_size == PAGE_T_SIZE + 1);
+        REQUIRE(col.pages.size() == 2);  // second page allocated
+
+        // Check boundary values
+        REQUIRE(col.get_at(0).get_int32() == 0);
+        REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == PAGE_T_SIZE - 1);
+        REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == 9999);
+    }
+
+    SECTION("Out-of-bounds returns NULL value") {
+        col.push_back(v.from_int32(7));
+
+        REQUIRE(col.get_at(-1).is_null());
+        REQUIRE(col.get_at(1).is_null());
+        REQUIRE(col.get_at(999).is_null());
+    }
+}
+TEST_CASE("Column_t stress tests", "[column_t]") {
+    Column_t col;
+    value_t v;
+
+    SECTION("Basic push and get") {
+        for (int i = 0; i < 100; i++) col.push_back(v.from_int32(i));
+
+        REQUIRE(col.total_size == 100);
+
+        for (int i = 0; i < 100; i++) {
+            value_t v = col.get_at(i);
+            REQUIRE(v.get_type() == ValueType::INT32);
+            REQUIRE(v.get_int32() == i);
+        }
+    }
+
+    SECTION("Crossing multiple pages") {
+        const int N = PAGE_T_SIZE * 3 + 123;
+
+        for (int i = 0; i < N; i++) col.push_back(v.from_int32(i));
+
+        REQUIRE(col.total_size == N);
+        REQUIRE(col.pages.size() == 4);
+
+        REQUIRE(col.get_at(0).get_int32() == 0);
+        REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == PAGE_T_SIZE - 1);
+        REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == PAGE_T_SIZE);
+        REQUIRE(col.get_at(PAGE_T_SIZE * 3 + 122).get_int32() == PAGE_T_SIZE * 3 + 122);
+    }
+
+    SECTION("Handling NULLs correctly") {
+        col.push_back(v.null_value());
+        col.push_back(v.from_int32(10));
+        col.push_back(v.null_value());
+
+        REQUIRE(col.total_size == 3);
+
+        REQUIRE(col.get_at(0).is_null());
+        REQUIRE(col.get_at(1).get_int32() == 10);
+        REQUIRE(col.get_at(2).is_null());
+    }
+
+    SECTION("Randomized stress test") {
+        const int N = PAGE_T_SIZE * 5 + 777;
+
+        std::vector<std::optional<int>> ground_truth;
+        ground_truth.reserve(N);
+
+        std::mt19937 rng(12345);
+        std::uniform_int_distribution<int> pick(0, 10);
+
+        for (int i = 0; i < N; i++) {
+            int r = pick(rng);
+            if (r == 0) {
+                col.push_back(v.null_value());
+                ground_truth.push_back(std::nullopt);
+            } else {
+                col.push_back(v.from_int32(r));
+                ground_truth.push_back(r);
+            }
+        }
+
+        REQUIRE(col.total_size == N);
+
+        for (int i = 0; i < N; i++) {
+            value_t v = col.get_at(i);
+            if (!ground_truth[i].has_value()) {
+                REQUIRE(v.is_null());
+            } else {
+                REQUIRE(v.get_int32() == ground_truth[i].value());
+            }
+        }
+    }
+
+    SECTION("Out-of-bounds reads") {
+        col.push_back(v.from_int32(7));
+
+        REQUIRE(col.get_at(1).is_null());
+        REQUIRE(col.get_at(PAGE_T_SIZE + 5).is_null());
+        REQUIRE(col.get_at(99999).is_null());
+    }
+
+    SECTION("Large volume test (millions)") {
+        const int N = PAGE_T_SIZE * 50 + 1025;
+
+        for (int i = 0; i < N; i++) col.push_back(v.from_int32(i));
+
+        REQUIRE(col.total_size == N);
+        REQUIRE(col.pages.size() == 52);
+
+        // check a few random points
+        REQUIRE(col.get_at(0).get_int32() == 0);
+        REQUIRE(col.get_at(PAGE_T_SIZE * 10 + 33).get_int32() == PAGE_T_SIZE * 10 + 33);
+        REQUIRE(col.get_at(N - 1).get_int32() == N - 1);
+    }
 }
