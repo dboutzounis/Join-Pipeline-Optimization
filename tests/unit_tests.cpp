@@ -1194,15 +1194,27 @@ TEST_CASE("Unchained manual insertion and lookup", "[unchained][lookup_manual]")
     uint64_t slot1 = hash1 >> 60;
     uint64_t slot2 = hash2 >> 60;
 
-    buffer[0].key = key1;
-    buffer[0].row_id = row1;
+    if (slot1 < slot2) {
+        buffer[0].key = key1;
+        buffer[0].row_id = row1;
 
-    buffer[1].key = key2;
-    buffer[1].row_id = row2;
+        buffer[1].key = key2;
+        buffer[1].row_id = row2;
 
-    directory.assign(directory.size(), 0);
-    directory[slot1] |= (1ULL << 16);
-    directory[slot2] |= (2ULL << 16);
+        directory.assign(directory.size(), 0);
+        directory[slot1] |= (1ULL << 16);
+        directory[slot2] |= (2ULL << 16);
+    } else {
+        buffer[0].key = key2;
+        buffer[0].row_id = row2;
+
+        buffer[1].key = key1;
+        buffer[1].row_id = row1;
+
+        directory.assign(directory.size(), 0);
+        directory[slot1] |= (2ULL << 16);
+        directory[slot2] |= (1ULL << 16);
+    }
 
     uint16_t tag1 = tags[(uint32_t)hash1 >> (32 - 11)];
     uint16_t tag2 = tags[(uint32_t)hash2 >> (32 - 11)];
