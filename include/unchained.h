@@ -24,6 +24,8 @@ class Unchained {
         size_t row_id;
     };
 
+    static constexpr uint32_t TAG_SHIFT = 32 - 11;
+
     std::vector<uint64_t> directory;
     std::vector<Bucket> buffer;
     uint64_t shift;

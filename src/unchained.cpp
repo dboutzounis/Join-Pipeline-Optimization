@@ -31,7 +31,7 @@ Unchained::Unchained(uint64_t shift) : total_count(0), shift(shift) {
 }
 
 bool Unchained::could_contain(uint16_t entry, uint64_t hash) {
-    uint16_t slot = static_cast<uint32_t>(hash) >> (32 - 11);
+    uint16_t slot = static_cast<uint32_t>(hash) >> TAG_SHIFT;
     uint16_t tag = tags[slot];
     return !(tag & ~entry);
 }
@@ -41,7 +41,7 @@ std::vector<size_t> Unchained::produce_matches(int32_t key, uint64_t slot, uint6
     size_t start = slot != 0 ? directory[slot - 1] >> 16 : 0;
     size_t end = entry >> 16;
     for (size_t i = start; i < end; i++)
-        if (buffer[i].key == key) matches.push_back(std::move(buffer[i].row_id));
+        if (buffer[i].key == key) matches.push_back(buffer[i].row_id);
     return matches;
 }
 
@@ -63,10 +63,10 @@ void Unchained::insert(int32_t key, size_t row_id) {
     uint64_t slot = hash >> shift;
     size_t start = slot != 0 ? directory[slot - 1] >> 16 : 0;
     size_t end = directory[slot] >> 16;
-    buffer[start + count[slot][1]].key = std::move(key);
-    buffer[start + count[slot][1]].row_id = std::move(row_id);
+    buffer[start + count[slot][1]].key = key;
+    buffer[start + count[slot][1]].row_id = row_id;
     count[slot][1]++;
-    uint16_t tag_slot = static_cast<uint32_t>(hash) >> (32 - 11);
+    uint16_t tag_slot = static_cast<uint32_t>(hash) >> TAG_SHIFT;
     uint16_t tag = tags[tag_slot];
     directory[slot] |= tag;
 }

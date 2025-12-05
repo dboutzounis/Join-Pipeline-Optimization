@@ -1,10 +1,7 @@
 #!/bin/bash
 
 executables=(
-  "./build/fast_cuckoo"
-  "./build/fast_hopscotch"
-  "./build/fast_robin"
-  "./build/fast_base"
+  "./build/fast"
 )
 plan_file="plans.json"
 runs=5
