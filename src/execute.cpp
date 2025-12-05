@@ -180,6 +180,10 @@ ExecuteResult copy_scan_materialization(const Plan& plan, const ColumnarTable& t
                         }
                         break;
                     }
+                    case DataType::INT64:
+                        break;
+                    case DataType::FP64:
+                        break;
                 }
             }
         }
@@ -342,6 +346,10 @@ ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const s
                 }
                 break;
             }
+            case DataType::INT64:
+                break;
+            case DataType::FP64:
+                break;
         }
     }
     return ret;

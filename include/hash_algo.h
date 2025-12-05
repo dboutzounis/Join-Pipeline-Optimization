@@ -87,7 +87,7 @@ class Robin_Hood : public Hash_Algorithm<Key, T> {
 
     void rehash(size_t new_capacity);
 
-    void print() const;
+    void print() const override;
 };
 
 template <typename T>
@@ -339,7 +339,7 @@ class Hopscotch : public Hash_Algorithm<Key, T> {
     }
 
     // Hash table display
-    void print() const {
+    void print() const override {
         std::cout << "{\n";
         for (size_t i = 0; i < size; i++) {
             const auto& bucket = hash_table[i];
