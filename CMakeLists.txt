@@ -109,18 +109,6 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     target_link_libraries(fast PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser)
     target_include_directories(build_cache PRIVATE include)
     target_include_directories(fast PRIVATE include)
-
-    function(add_fast_exec name algo)
-        add_executable(${name} ${SIGMODPC_SRC} tests/read_sql.cpp)
-        target_link_libraries(${name} PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser)
-        target_compile_definitions(${name} PRIVATE HASH_ALGO_TYPE=${algo})
-        target_include_directories(${name} PRIVATE include)
-    endfunction()
-
-    add_fast_exec(fast_base Base_Solution)
-    add_fast_exec(fast_robin Robin_Hood)
-    add_fast_exec(fast_hopscotch Hopscotch)
-    add_fast_exec(fast_cuckoo Cuckoo)
 endif()
 
 target_link_libraries(run PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
