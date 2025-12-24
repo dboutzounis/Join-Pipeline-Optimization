@@ -1017,7 +1017,7 @@ TEST_CASE("Column_t basic push/get operations", "[column_t]") {
             col.push_back(v.from_int32(i));
         }
 
-        REQUIRE(col.total_size == 100);
+        REQUIRE(col.size() == 100);
 
         for (int i = 0; i < 100; i++) {
             value_t v = col.get_at(i);
@@ -1034,8 +1034,8 @@ TEST_CASE("Column_t basic push/get operations", "[column_t]") {
         // Push into second page
         col.push_back(v.from_int32(9999));
 
-        REQUIRE(col.total_size == PAGE_T_SIZE + 1);
-        REQUIRE(col.pages.size() == 2);  // second page allocated
+        REQUIRE(col.size() == PAGE_T_SIZE + 1);
+        REQUIRE(col.page_num() == 2);  // second page allocated
 
         // Check boundary values
         REQUIRE(col.get_at(0).get_int32() == 0);
@@ -1058,7 +1058,7 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
     SECTION("Basic push and get") {
         for (int i = 0; i < 100; i++) col.push_back(v.from_int32(i));
 
-        REQUIRE(col.total_size == 100);
+        REQUIRE(col.size() == 100);
 
         for (int i = 0; i < 100; i++) {
             value_t v = col.get_at(i);
@@ -1072,8 +1072,8 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
 
         for (int i = 0; i < N; i++) col.push_back(v.from_int32(i));
 
-        REQUIRE(col.total_size == N);
-        REQUIRE(col.pages.size() == 4);
+        REQUIRE(col.size() == N);
+        REQUIRE(col.page_num() == 4);
 
         REQUIRE(col.get_at(0).get_int32() == 0);
         REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == PAGE_T_SIZE - 1);
@@ -1086,7 +1086,7 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
         col.push_back(v.from_int32(10));
         col.push_back(v.null_value());
 
-        REQUIRE(col.total_size == 3);
+        REQUIRE(col.size() == 3);
 
         REQUIRE(col.get_at(0).is_null());
         REQUIRE(col.get_at(1).get_int32() == 10);
@@ -1113,7 +1113,7 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
             }
         }
 
-        REQUIRE(col.total_size == N);
+        REQUIRE(col.size() == N);
 
         for (int i = 0; i < N; i++) {
             value_t v = col.get_at(i);
@@ -1138,14 +1138,47 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
 
         for (int i = 0; i < N; i++) col.push_back(v.from_int32(i));
 
-        REQUIRE(col.total_size == N);
-        REQUIRE(col.pages.size() == 52);
+        REQUIRE(col.size() == N);
+        REQUIRE(col.page_num() == 52);
 
         // check a few random points
         REQUIRE(col.get_at(0).get_int32() == 0);
         REQUIRE(col.get_at(PAGE_T_SIZE * 10 + 33).get_int32() == PAGE_T_SIZE * 10 + 33);
         REQUIRE(col.get_at(N - 1).get_int32() == N - 1);
     }
+}
+TEST_CASE("Column_t PageOwned stores and retrieves int32 pages",
+          "[column_t][Page_owned]") {
+
+
+    auto* page1 = new int32_t[INT32_ROWS_PER_PAGE];
+    auto* page2 = new int32_t[INT32_ROWS_PER_PAGE];
+
+    for (size_t i = 0; i < INT32_ROWS_PER_PAGE; ++i) {
+        page1[i] = static_cast<int32_t>(i);
+        page2[i] = static_cast<int32_t>(i + 10'000);
+    }
+
+    Column_t col(ColumnStorage::PageOwned , 2*INT32_ROWS_PER_PAGE);
+
+    col.push_page(page1 , INT32_ROWS_PER_PAGE);
+    col.push_page(page2 , INT32_ROWS_PER_PAGE);
+
+    REQUIRE(col.page_num() == 2);
+    REQUIRE(col.size() == 2 * INT32_ROWS_PER_PAGE);
+
+    for (size_t i = 0; i < INT32_ROWS_PER_PAGE; ++i) {
+        auto v = col.get_at(i);
+        REQUIRE(v.get_int32() == static_cast<int32_t>(i));
+    }
+
+    for (size_t i = 0; i < INT32_ROWS_PER_PAGE; ++i) {
+        auto v = col.get_at(INT32_ROWS_PER_PAGE + i);
+        REQUIRE(v.get_int32() == static_cast<int32_t>(i + 10'000));
+    }
+
+    delete[] page1;
+    delete[] page2;
 }
 
 TEST_CASE("Unchained basic key_count and build", "[unchained][unchained_build]") {

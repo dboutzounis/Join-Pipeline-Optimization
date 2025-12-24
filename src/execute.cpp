@@ -37,7 +37,7 @@ struct JoinAlgorithm {
         size_t build_col = build_left ? left_col : right_col;
         size_t probe_col = build_left ? right_col : left_col;
 
-        for (size_t idx = 0; idx < build_table[0].total_size; idx++) {
+        for (size_t idx = 0; idx < build_table[0].size(); idx++) {
             value_t val = build_table[build_col].get_at(idx);
 
             auto smart_key = extract_key<T>(val);
@@ -47,7 +47,7 @@ struct JoinAlgorithm {
             hash_table.key_count(static_cast<int32_t>(key));
         }
         hash_table.build();
-        for (size_t idx = 0; idx < build_table[0].total_size; idx++) {
+        for (size_t idx = 0; idx < build_table[0].size(); idx++) {
             value_t val = build_table[build_col].get_at(idx);
 
             auto smart_key = extract_key<T>(val);
@@ -56,7 +56,7 @@ struct JoinAlgorithm {
             const T& key = *smart_key;
             hash_table.insert(static_cast<int32_t>(key), idx);
         }
-        for (size_t probe_idx = 0; probe_idx < probe_table[0].total_size; probe_idx++) {
+        for (size_t probe_idx = 0; probe_idx < probe_table[0].size(); probe_idx++) {
             auto smart_key = extract_key<T>(probe_table[probe_col].get_at(probe_idx));
             if (!smart_key) continue;
             const T& key = *smart_key;
@@ -77,6 +77,7 @@ struct JoinAlgorithm {
         }
     }
 };
+
 
 template <>
 inline std::optional<int32_t> JoinAlgorithm::extract_key<int32_t>(const value_t& v) const {
@@ -116,78 +117,131 @@ bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
     return bitmap[byte_idx] & (1u << bit);
 }
 
-ExecuteResult copy_scan_materialization(const Plan& plan, const ColumnarTable& table, const std::vector<std::tuple<size_t, DataType>>& output_attrs,
-                                        uint8_t table_id) {
-    namespace views = ranges::views;
-    ExecuteResult results(output_attrs.size(), Column_t(table.num_rows));
-    std::vector<DataType> types(table.columns.size());
+static bool column_has_nulls(const Column& column) {
+    for (const auto& page_ptr : column.pages) {
+        auto* page = page_ptr->data;
+
+        uint16_t num_rows     = *reinterpret_cast<uint16_t*>(page + 0);
+        uint16_t num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
+
+        if (num_non_null < num_rows) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ExecuteResult copy_scan_materialization(
+    const Plan& plan,
+    const ColumnarTable& table,
+    const std::vector<std::tuple<size_t, DataType>>& output_attrs,
+    uint8_t table_id
+) {
+    ExecuteResult results;
+    results.reserve(output_attrs.size());
+
+    std::vector<bool> has_nulls(output_attrs.size());
+
+    //detect collumns with nulls
+    for (size_t i = 0; i < output_attrs.size(); ++i) {
+        size_t in_col_idx = std::get<0>(output_attrs[i]);
+        const auto& column = table.columns[in_col_idx];
+
+        if (column.type == DataType::INT32) {
+            has_nulls[i] = column_has_nulls(column);
+        } else {
+            has_nulls[i] = true;
+        }
+
+        if (column.type == DataType::INT32 && !has_nulls[i]) {
+            results.emplace_back(ColumnStorage::PageOwned, table.num_rows);
+        } else {
+            results.emplace_back(ColumnStorage::ValueOwned, table.num_rows);
+        }
+    }
+
     auto task = [&](size_t begin, size_t end) {
-        size_t col_pap = 0;
         value_t v;
+
         for (size_t column_idx = begin; column_idx < end; ++column_idx) {
             size_t in_col_idx = std::get<0>(output_attrs[column_idx]);
-            auto& column = table.columns[in_col_idx];
-            types[in_col_idx] = column.type;
-            for (uint32_t page_id = 0; page_id < column.pages.size(); page_id++) {
+            const auto& column = table.columns[in_col_idx];
+
+            for (size_t page_id = 0; page_id < column.pages.size(); ++page_id) {
                 auto* page = column.pages[page_id]->data;
+
                 switch (column.type) {
-                    case DataType::INT32: {
-                        auto num_rows = *reinterpret_cast<uint16_t*>(page);
-                        auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
-                        auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
-                        uint16_t data_idx = 0;
-                        for (uint16_t i = 0; i < num_rows; ++i) {
-                            if (get_bitmap(bitmap, i)) {
-                                auto value = data_begin[data_idx++];
-                                results[column_idx].push_back(v.from_int32(value));
-                            } else {
-                                results[column_idx].push_back(v.null_value());
-                            }
-                        }
+
+                case DataType::INT32: {
+                    uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
+                    auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
+
+                    if (!has_nulls[column_idx]) {
+                        results[column_idx].push_page(data_begin, num_rows);
                         break;
                     }
-                    case DataType::VARCHAR: {
-                        auto num_rows = *reinterpret_cast<uint16_t*>(page);
-                        if (num_rows == 0xffff) {
-                            auto num_chars = *reinterpret_cast<uint16_t*>(page + 2);
-                            auto* data_begin = reinterpret_cast<char*>(page + 4);
 
-                            Smart_string smart_string;
-                            smart_string = smart_string.encode(table_id, in_col_idx, page_id, 0);
-                            results[column_idx].push_back(v.from_string(smart_string));
-                        } else if (num_rows == 0xfffe) {
-                            continue;
+                    auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+
+                    uint16_t data_idx = 0;
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+                        if (get_bitmap(bitmap, i)) {
+                            results[column_idx].push_back(
+                                v.from_int32(data_begin[data_idx++])
+                            );
                         } else {
-                            auto num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
-                            auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
-                            auto* data_begin = reinterpret_cast<char*>(page + 4 + num_non_null * 2);
-                            auto* string_begin = data_begin;
-                            auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
-                            uint16_t data_idx = 0;
-                            for (uint16_t i = 0; i < num_rows; ++i) {
-                                if (get_bitmap(bitmap, i)) {
-                                    auto offset = offset_begin[data_idx];
-                                    std::string value{string_begin, data_begin + offset};
-                                    string_begin = data_begin + offset;
-
-                                    Smart_string smart_string;
-                                    smart_string = smart_string.encode(table_id, in_col_idx, page_id, data_idx++);
-                                    results[column_idx].push_back(v.from_string(smart_string));
-                                } else {
-                                    results[column_idx].push_back(v.null_value());
-                                }
-                            }
+                            results[column_idx].push_back(v.null_value());
                         }
+                    }
+                    break;
+                }
+
+                case DataType::VARCHAR: {
+                    uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
+
+                    if (num_rows == 0xffff) {
+                        Smart_string s;
+                        s = s.encode(table_id, in_col_idx, page_id, 0);
+                        results[column_idx].push_back(v.from_string(s));
                         break;
                     }
-                    case DataType::INT64:
-                        break;
-                    case DataType::FP64:
-                        break;
+
+                    if (num_rows == 0xfffe) {
+                        continue;
+                    }
+
+                    uint16_t num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
+                    auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
+                    auto* data_begin =
+                        reinterpret_cast<char*>(page + 4 + num_non_null * 2);
+                    auto* string_begin = data_begin;
+                    auto* bitmap =
+                        reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+
+                    uint16_t data_idx = 0;
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+                        if (get_bitmap(bitmap, i)) {
+                            uint16_t offset = offset_begin[data_idx];
+
+                            Smart_string s;
+                            s = s.encode(table_id, in_col_idx, page_id, data_idx++);
+                            results[column_idx].push_back(v.from_string(s));
+
+                            string_begin += offset;
+                        } else {
+                            results[column_idx].push_back(v.null_value());
+                        }
+                    }
+                    break;
+                }
+
+                default:
+                    break;
                 }
             }
         }
     };
+
     filter_tp.run(task, output_attrs.size());
     return results;
 }
@@ -233,7 +287,7 @@ void unset_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
 ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const std::vector<DataType>& ret_types) {
     namespace views = ranges::views;
     ColumnarTable ret;
-    ret.num_rows = result.empty() ? 0 : result[0].total_size;
+    ret.num_rows = result.empty() ? 0 : result[0].size();
     for (auto [col_idx, data_type] : ret_types | views::enumerate) {
         ret.columns.emplace_back(data_type);
         auto& column = ret.columns.back();
@@ -254,7 +308,7 @@ ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const s
                     data.clear();
                     bitmap.clear();
                 };
-                for (size_t index = 0; index < result[col_idx].total_size; index++) {
+                for (size_t index = 0; index < result[col_idx].size(); index++) {
                     auto value = result[col_idx].get_at(index);
                     if (value.get_type() == ValueType::INT32) {
                         if (4 + (data.size() + 1) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
@@ -313,7 +367,7 @@ ColumnarTable to_columnar(const Plan& plan, const ExecuteResult& result, const s
                     offsets.clear();
                     bitmap.clear();
                 };
-                for (size_t index = 0; index < result[col_idx].total_size; index++) {
+                for (size_t index = 0; index < result[col_idx].size(); index++) {
                     auto value = result[col_idx].get_at(index);
                     if (value.get_type() == ValueType::SMART_STRING) {
                         std::string str = value.get_string().get_value(plan);
