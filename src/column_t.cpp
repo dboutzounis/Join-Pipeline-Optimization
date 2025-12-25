@@ -31,13 +31,24 @@ value_t ValueColumn::get_at(size_t index) const {
     return pages[pageIndex].values[offset];
 }
 
+void  ValueColumn::write_at(const value_t& v , size_t index){
+    size_t pageIndex = index >> PAGE_SHIFT;
+    size_t offset = index & PAGE_MASK;
+
+    if (offset == 0 && pages.size() <= pageIndex) {
+        pages.push_back(Page_t());
+    }
+
+    pages[pageIndex].values[offset] = v;
+    total_size++;
+}
+
 size_t ValueColumn::size() const {
     return total_size;
 }
 size_t ValueColumn::page_num() const{
     return pages.size();
 }
-
 PageColumn::PageColumn() : total_size(0){}
 
 PageColumn::PageColumn(size_t expected_rows)
@@ -59,7 +70,6 @@ void PageColumn::push_page(int32_t* data, uint16_t num_rows) {
     pages.push_back(data);
     total_size += num_rows;
 }
-
 
 size_t PageColumn::size() const {
     return total_size;
@@ -90,6 +100,10 @@ Column_t::Column_t(ColumnStorage s, size_t expected_rows)
 void Column_t::push_back(const value_t& v) {
     assert(storage == ColumnStorage::ValueOwned);
     static_cast<ValueColumn*>(impl.get())->push_back(v);
+}
+void Column_t::write_at(const value_t& v , size_t index){
+    assert(storage == ColumnStorage::ValueOwned);
+    static_cast<ValueColumn*>(impl.get())->write_at(v , index);
 }
 
 void Column_t::push_page(int32_t* page , uint16_t num_rows){
