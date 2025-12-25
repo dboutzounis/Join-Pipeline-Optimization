@@ -38,12 +38,11 @@ struct ValueColumn final : ColumnImpl {
     explicit ValueColumn(size_t expected_rows);
 
     void push_back(const value_t& v);
-
+    void write_at(const value_t& v , size_t index);
     value_t get_at(size_t index) const override;
     size_t size() const override;
     size_t page_num() const override;
 
-private:
     std::vector<Page_t> pages;
     size_t total_size;
 };
@@ -57,7 +56,6 @@ struct PageColumn final :ColumnImpl{
     size_t page_num() const override;
     size_t total_size;
 
-private:
     std::vector< int32_t*> pages;
 };
 
@@ -66,12 +64,12 @@ struct Column_t {
     explicit Column_t(ColumnStorage storage , size_t expected_rows);
 
     void push_back(const value_t& v);
+    void write_at(const value_t& v , size_t index);
     void push_page(int32_t* page , uint16_t num_rows);
     value_t get_at(size_t i) const;
     size_t size() const;
     size_t page_num() const;
-
-private:
+    
     std::unique_ptr<ColumnImpl> impl;
     ColumnStorage storage;
 };

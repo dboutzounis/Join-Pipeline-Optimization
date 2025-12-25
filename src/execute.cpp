@@ -78,7 +78,6 @@ struct JoinAlgorithm {
     }
 };
 
-
 template <>
 inline std::optional<int32_t> JoinAlgorithm::extract_key<int32_t>(const value_t& v) const {
     if (v.is_null()) return std::nullopt;

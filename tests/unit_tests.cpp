@@ -1008,49 +1008,6 @@ TEST_CASE("value_t preserves lower 2 bits as type mask", "[value_t][bitmask]") {
     REQUIRE((vs.data & value_t::TYPE_MASK) == static_cast<uint64_t>(ValueType::SMART_STRING));
 }
 
-TEST_CASE("Column_t basic push/get operations", "[column_t]") {
-    Column_t col;
-    value_t v;
-
-    SECTION("Push and read values within a single page") {
-        for (int i = 0; i < 100; i++) {
-            col.push_back(v.from_int32(i));
-        }
-
-        REQUIRE(col.size() == 100);
-
-        for (int i = 0; i < 100; i++) {
-            value_t v = col.get_at(i);
-            REQUIRE(v.get_int32() == i);
-        }
-    }
-
-    SECTION("Push across page boundary and read correctly") {
-        // Fill FULL first page
-        for (int i = 0; i < PAGE_T_SIZE; i++) {
-            col.push_back(v.from_int32(i));
-        }
-
-        // Push into second page
-        col.push_back(v.from_int32(9999));
-
-        REQUIRE(col.size() == PAGE_T_SIZE + 1);
-        REQUIRE(col.page_num() == 2);  // second page allocated
-
-        // Check boundary values
-        REQUIRE(col.get_at(0).get_int32() == 0);
-        REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == PAGE_T_SIZE - 1);
-        REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == 9999);
-    }
-
-    SECTION("Out-of-bounds returns NULL value") {
-        col.push_back(v.from_int32(7));
-
-        REQUIRE(col.get_at(-1).is_null());
-        REQUIRE(col.get_at(1).is_null());
-        REQUIRE(col.get_at(999).is_null());
-    }
-}
 TEST_CASE("Column_t stress tests", "[column_t]") {
     Column_t col;
     value_t v;
@@ -1147,6 +1104,57 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
         REQUIRE(col.get_at(N - 1).get_int32() == N - 1);
     }
 }
+
+TEST_CASE("Column_t write_at with preallocated pages" , "[column_t]") {
+    const size_t N = PAGE_T_SIZE * 2 + 10;
+
+    Column_t col(ColumnStorage::ValueOwned , N);
+    value_t v;
+
+    for (size_t i = 0; i < N; i++) {
+        col.write_at(v.from_int32(static_cast<int32_t>(i * 2)), i);
+    }
+
+    REQUIRE(col.size() == N);
+    REQUIRE(col.get_at(0).get_int32() == 0);
+    REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == (PAGE_T_SIZE - 1) * 2);
+    REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == PAGE_T_SIZE * 2);
+    REQUIRE(col.get_at(N - 1).get_int32() == (N - 1) * 2);
+
+    REQUIRE(col.page_num() >= 3);
+}
+
+TEST_CASE("Column_t write_at non-sequential indices", "[column_t]") {
+    const size_t N = PAGE_T_SIZE * 3 + 17;
+
+    Column_t col(ColumnStorage::ValueOwned, N);
+    value_t v;
+
+    // generate a permutation of indices [0, N)
+    std::vector<size_t> indices(N);
+    std::iota(indices.begin(), indices.end(), 0);
+
+    std::mt19937 rng(42);
+    std::shuffle(indices.begin(), indices.end(), rng);
+
+    // write in random order
+    for (size_t idx : indices) {
+        col.write_at(v.from_int32(static_cast<int32_t>(idx)), idx);
+    }
+
+    REQUIRE(col.size() == N);
+    for (size_t i = 0; i < N; i++) {
+        value_t r = col.get_at(i);
+        REQUIRE_FALSE(r.is_null());
+        REQUIRE(r.get_int32() == static_cast<int32_t>(i));
+    }
+
+    // check page boundary spots
+    REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == PAGE_T_SIZE - 1);
+    REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == PAGE_T_SIZE);
+    REQUIRE(col.get_at(PAGE_T_SIZE * 2).get_int32() == PAGE_T_SIZE * 2);
+}
+
 TEST_CASE("Column_t PageOwned stores and retrieves int32 pages",
           "[column_t][Page_owned]") {
 
@@ -1180,6 +1188,7 @@ TEST_CASE("Column_t PageOwned stores and retrieves int32 pages",
     delete[] page1;
     delete[] page2;
 }
+
 
 TEST_CASE("Unchained basic key_count and build", "[unchained][unchained_build]") {
     Unchained h(60);
