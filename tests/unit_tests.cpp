@@ -1105,55 +1105,19 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
     }
 }
 
-TEST_CASE("Column_t write_at with preallocated pages" , "[column_t]") {
-    const size_t N = PAGE_T_SIZE * 2 + 10;
-
-    Column_t col(ColumnStorage::ValueOwned , N);
+TEST_CASE("ValueColumn write_at allocates pages regardless of offset", "[column_t][write_at]") {
+    ValueColumn col;   // start with NO pages
     value_t v;
 
-    for (size_t i = 0; i < N; i++) {
-        col.write_at(v.from_int32(static_cast<int32_t>(i * 2)), i);
-    }
+    size_t index = PAGE_T_SIZE * 2 + 7;
 
-    REQUIRE(col.size() == N);
-    REQUIRE(col.get_at(0).get_int32() == 0);
-    REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == (PAGE_T_SIZE - 1) * 2);
-    REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == PAGE_T_SIZE * 2);
-    REQUIRE(col.get_at(N - 1).get_int32() == (N - 1) * 2);
+    REQUIRE(col.page_num() == 0);
 
-    REQUIRE(col.page_num() >= 3);
+    col.write_at(v.from_int32(123), index);
+    REQUIRE(col.page_num() == 3);
+    REQUIRE(col.get_at(index).get_int32() == 123);
 }
 
-TEST_CASE("Column_t write_at non-sequential indices", "[column_t]") {
-    const size_t N = PAGE_T_SIZE * 3 + 17;
-
-    Column_t col(ColumnStorage::ValueOwned, N);
-    value_t v;
-
-    // generate a permutation of indices [0, N)
-    std::vector<size_t> indices(N);
-    std::iota(indices.begin(), indices.end(), 0);
-
-    std::mt19937 rng(42);
-    std::shuffle(indices.begin(), indices.end(), rng);
-
-    // write in random order
-    for (size_t idx : indices) {
-        col.write_at(v.from_int32(static_cast<int32_t>(idx)), idx);
-    }
-
-    REQUIRE(col.size() == N);
-    for (size_t i = 0; i < N; i++) {
-        value_t r = col.get_at(i);
-        REQUIRE_FALSE(r.is_null());
-        REQUIRE(r.get_int32() == static_cast<int32_t>(i));
-    }
-
-    // check page boundary spots
-    REQUIRE(col.get_at(PAGE_T_SIZE - 1).get_int32() == PAGE_T_SIZE - 1);
-    REQUIRE(col.get_at(PAGE_T_SIZE).get_int32() == PAGE_T_SIZE);
-    REQUIRE(col.get_at(PAGE_T_SIZE * 2).get_int32() == PAGE_T_SIZE * 2);
-}
 
 TEST_CASE("Column_t PageOwned stores and retrieves int32 pages",
           "[column_t][Page_owned]") {

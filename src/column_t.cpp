@@ -20,14 +20,13 @@ void ValueColumn::push_back(const value_t& v) {
 }
 
 value_t ValueColumn::get_at(size_t index) const {
-    if (index >= total_size) {
-        value_t v;
-        return v.null_value();
-    }
-
     size_t pageIndex = index >> PAGE_SHIFT;
     size_t offset = index & PAGE_MASK;
 
+     if (pageIndex >= pages.size()){
+        value_t v;
+        return v.null_value();
+    }
     return pages[pageIndex].values[offset];
 }
 
@@ -35,9 +34,12 @@ void  ValueColumn::write_at(const value_t& v , size_t index){
     size_t pageIndex = index >> PAGE_SHIFT;
     size_t offset = index & PAGE_MASK;
 
-    if (offset == 0 && pages.size() <= pageIndex) {
-        pages.push_back(Page_t());
+    if (pages.size() <= pageIndex) {
+        pages.resize(pageIndex + 1);
     }
+
+    pages[pageIndex].values[offset] = v;
+    total_size++;
 
     pages[pageIndex].values[offset] = v;
     total_size++;
