@@ -1,12 +1,28 @@
 #pragma once
 
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#define USE_X86_CRC 1
+#elif defined(__aarch64__)
+#include <arm_acle.h>
+#define USE_ARM_CRC 1
+#endif
+
 #include <materialization.h>
 
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <thread>
 #include <vector>
+
+static constexpr uint32_t SMALL_CHUNK = 1u << 14;
+static constexpr uint32_t LARGE_CHUNK = 1u << 20;
+
+uint32_t fast_crc32_u32(uint32_t seed, uint32_t key);
+
+uint64_t hash32(uint32_t key, uint32_t seed);
 
 struct BuildTuple {
     uint64_t hash;
@@ -21,7 +37,9 @@ struct Chunk {
     alignas(64) uint8_t data[];
 };
 
-static Chunk* allocate_chunk(uint32_t bytes);
+Chunk* allocate_chunk(uint32_t bytes);
+BuildTuple* chunk_begin(Chunk* c);
+BuildTuple* chunk_end(Chunk* c);
 
 struct GlobalAllocator {
     Chunk* allocateLarge(uint32_t bytes);
@@ -52,6 +70,8 @@ struct CollectedTuples {
     std::vector<std::unique_ptr<ThreadAllocator>> threads;
     uint32_t num_partitiions;
 };
+
+void free_bump_alloc(BumpAlloc& alloc);
 
 template <typename Column>
 CollectedTuples collect_build_tuples(const Column& build_column, size_t num_rows, uint32_t num_threads, uint32_t num_partitions) {
@@ -87,10 +107,9 @@ CollectedTuples collect_build_tuples(const Column& build_column, size_t num_rows
     return result;
 }
 
-struct MergedPartition {
-    Chunk* head;
-    Chunk* tail;
+struct PartitionParams {
+    uint64_t buffer_offset;
     uint64_t tuple_count;
+    size_t dir_begin;
+    size_t dir_end;
 };
-
-MergedPartition merge_partition(const CollectedTuples collected, uint32_t partition);

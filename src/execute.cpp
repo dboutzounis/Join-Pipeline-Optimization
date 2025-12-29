@@ -37,25 +37,37 @@ struct JoinAlgorithm {
         size_t build_col = build_left ? left_col : right_col;
         size_t probe_col = build_left ? right_col : left_col;
 
-        for (size_t idx = 0; idx < build_table[0].size(); idx++) {
-            value_t val = build_table[build_col].get_at(idx);
+        const size_t build_rows = build_table.empty() ? 0 : build_table[0].size();
 
-            auto smart_key = extract_key<T>(val);
-            if (!smart_key) continue;
+        uint32_t num_threads = static_cast<uint32_t>(std::thread::hardware_concurrency());
+        if (num_threads == 0) num_threads = 1;
 
-            const T& key = *smart_key;
-            hash_table.key_count(static_cast<int32_t>(key));
+        uint32_t num_partitions = 1;
+        uint32_t target = std::min<uint32_t>(1024u, std::max<uint32_t>(1u, num_threads * 4u));
+        while (num_partitions < target) num_partitions <<= 1;
+
+        auto collected = collect_build_tuples(build_table[build_col], build_rows, num_threads, num_partitions);
+        auto params_per_partition = hash_table.counting_per_partition(collected);
+
+        uint64_t total_tuples = 0;
+
+        for (const auto& p : params_per_partition) total_tuples += p.tuple_count;
+        hash_table.allocate_tuple_storage(total_tuples);
+
+        std::vector<std::thread> workers;
+        workers.reserve(num_threads);
+        for (uint32_t tid = 0; tid < num_threads; tid++) {
+            workers.emplace_back([&, tid]() {
+                for (uint32_t p = tid; p < num_partitions; p += num_threads) hash_table.post_process_build(collected, params_per_partition[p], p);
+            });
         }
-        hash_table.build();
-        for (size_t idx = 0; idx < build_table[0].size(); idx++) {
-            value_t val = build_table[build_col].get_at(idx);
 
-            auto smart_key = extract_key<T>(val);
-            if (!smart_key) continue;
+        for (auto& t : workers) t.join();
 
-            const T& key = *smart_key;
-            hash_table.insert(static_cast<int32_t>(key), idx);
+        for (auto& t : collected.threads) {
+            if (t) free_bump_alloc(t->level2);
         }
+
         for (size_t probe_idx = 0; probe_idx < probe_table[0].size(); probe_idx++) {
             auto smart_key = extract_key<T>(probe_table[probe_col].get_at(probe_idx));
             if (!smart_key) continue;
@@ -120,7 +132,7 @@ static bool column_has_nulls(const Column& column) {
     for (const auto& page_ptr : column.pages) {
         auto* page = page_ptr->data;
 
-        uint16_t num_rows     = *reinterpret_cast<uint16_t*>(page + 0);
+        uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
         uint16_t num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
 
         if (num_non_null < num_rows) {
@@ -130,18 +142,14 @@ static bool column_has_nulls(const Column& column) {
     return false;
 }
 
-ExecuteResult copy_scan_materialization(
-    const Plan& plan,
-    const ColumnarTable& table,
-    const std::vector<std::tuple<size_t, DataType>>& output_attrs,
-    uint8_t table_id
-) {
+ExecuteResult copy_scan_materialization(const Plan& plan, const ColumnarTable& table, const std::vector<std::tuple<size_t, DataType>>& output_attrs,
+                                        uint8_t table_id) {
     ExecuteResult results;
     results.reserve(output_attrs.size());
 
     std::vector<bool> has_nulls(output_attrs.size());
 
-    //detect collumns with nulls
+    // detect collumns with nulls
     for (size_t i = 0; i < output_attrs.size(); ++i) {
         size_t in_col_idx = std::get<0>(output_attrs[i]);
         const auto& column = table.columns[in_col_idx];
@@ -170,72 +178,67 @@ ExecuteResult copy_scan_materialization(
                 auto* page = column.pages[page_id]->data;
 
                 switch (column.type) {
+                    case DataType::INT32: {
+                        uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
+                        auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
 
-                case DataType::INT32: {
-                    uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
-                    auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
-
-                    if (!has_nulls[column_idx]) {
-                        results[column_idx].push_page(data_begin, num_rows);
-                        break;
-                    }
-
-                    auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
-
-                    uint16_t data_idx = 0;
-                    for (uint16_t i = 0; i < num_rows; ++i) {
-                        if (get_bitmap(bitmap, i)) {
-                            results[column_idx].push_back(
-                                v.from_int32(data_begin[data_idx++])
-                            );
-                        } else {
-                            results[column_idx].push_back(v.null_value());
+                        if (!has_nulls[column_idx]) {
+                            results[column_idx].push_page(data_begin, num_rows);
+                            break;
                         }
-                    }
-                    break;
-                }
 
-                case DataType::VARCHAR: {
-                    uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
+                        auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
 
-                    if (num_rows == 0xffff) {
-                        Smart_string s;
-                        s = s.encode(table_id, in_col_idx, page_id, 0);
-                        results[column_idx].push_back(v.from_string(s));
+                        uint16_t data_idx = 0;
+                        for (uint16_t i = 0; i < num_rows; ++i) {
+                            if (get_bitmap(bitmap, i)) {
+                                results[column_idx].push_back(v.from_int32(data_begin[data_idx++]));
+                            } else {
+                                results[column_idx].push_back(v.null_value());
+                            }
+                        }
                         break;
                     }
 
-                    if (num_rows == 0xfffe) {
-                        continue;
-                    }
+                    case DataType::VARCHAR: {
+                        uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
 
-                    uint16_t num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
-                    auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
-                    auto* data_begin =
-                        reinterpret_cast<char*>(page + 4 + num_non_null * 2);
-                    auto* string_begin = data_begin;
-                    auto* bitmap =
-                        reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
-
-                    uint16_t data_idx = 0;
-                    for (uint16_t i = 0; i < num_rows; ++i) {
-                        if (get_bitmap(bitmap, i)) {
-                            uint16_t offset = offset_begin[data_idx];
-
+                        if (num_rows == 0xffff) {
                             Smart_string s;
-                            s = s.encode(table_id, in_col_idx, page_id, data_idx++);
+                            s = s.encode(table_id, in_col_idx, page_id, 0);
                             results[column_idx].push_back(v.from_string(s));
-
-                            string_begin += offset;
-                        } else {
-                            results[column_idx].push_back(v.null_value());
+                            break;
                         }
-                    }
-                    break;
-                }
 
-                default:
-                    break;
+                        if (num_rows == 0xfffe) {
+                            continue;
+                        }
+
+                        uint16_t num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
+                        auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
+                        auto* data_begin = reinterpret_cast<char*>(page + 4 + num_non_null * 2);
+                        auto* string_begin = data_begin;
+                        auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+
+                        uint16_t data_idx = 0;
+                        for (uint16_t i = 0; i < num_rows; ++i) {
+                            if (get_bitmap(bitmap, i)) {
+                                uint16_t offset = offset_begin[data_idx];
+
+                                Smart_string s;
+                                s = s.encode(table_id, in_col_idx, page_id, data_idx++);
+                                results[column_idx].push_back(v.from_string(s));
+
+                                string_begin += offset;
+                            } else {
+                                results[column_idx].push_back(v.null_value());
+                            }
+                        }
+                        break;
+                    }
+
+                    default:
+                        break;
                 }
             }
         }
