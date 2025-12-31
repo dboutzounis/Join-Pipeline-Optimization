@@ -20,6 +20,8 @@ class Unchained {
     std::vector<Bucket> buffer;
     uint64_t shift;
     uint16_t tags[2048];
+    std::vector<std::vector<size_t>> count;
+    size_t total_count;
 
     bool could_contain(uint16_t entry, uint64_t hash);
 
@@ -33,6 +35,14 @@ class Unchained {
     inline std::vector<Bucket>& get_buffer() { return buffer; }
 
     inline uint16_t* get_tags() { return tags; }
+
+    inline uint64_t get_shift() const { return shift; }
+
+    void key_count(int32_t key);
+
+    void build();
+
+    void insert(int32_t key, size_t row_id);
 
     std::vector<PartitionParams> counting_per_partition(const CollectedTuples& collected);
 
