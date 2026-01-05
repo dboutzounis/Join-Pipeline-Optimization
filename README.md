@@ -1,6 +1,6 @@
 # Join Pipeline Optimization
 
-## Second Assignment: Column store - Unchained Hash
+## Third Assignment: Indexing Optimization and Parallel Joins
 
 ### Authors
 
@@ -10,370 +10,188 @@
 
 ### Overview
 
-This project implements the second assignment on the query join operation. The goal is to extend the database execution engine with more efficient data handling, memory usage, and join performance. The implementation includes:
+### Index Optimization (Stephanou Iasonas)
 
-- Optimized VARCHAR Handling (Late Materialization)
+This implementation introduces an internal optimization for column storage while **preserving the exact same `Column_t` public API**.  
+The goal is to improve indexing and access efficiency without affecting execution logic or column consumers.
 
-  Strings are represented as compact 64-bit references instead of full copies. The new `value_t` type stores both integers and smart string references, reducing memory movement and improving performance.
+**Core Idea:**
 
-- Column-store Intermediate Results
+> Storage-level optimizations must not leak into the public API.
 
-  Intermediate data is stored in paginated columnar format (`vector<column_t>`), replacing the previous row-store layout. This improves cache locality and prepares the system for parallel join processing.
-
-- Unchained Hash Table for Joins
-
-  We implement the unchained hash table, using:
-
-  - contiguous tuple storage
-  - a directory with embedded Bloom filters
-  - fast CRC32-based hashing
-    This design supports efficient and robust hash joins.
-
-- Columnar Final Output
-  The root join produces a `ColumnarTable` directly, with string materialization performed only at the end when needed.
-
-### Late Materialization and value_t Type (All)
-
-The materialization introduces a compact and efficient way to represent and recover string (VARCHAR) values during query execution. Smart_string encodes the location of a VARCHAR inside the original column-store input using a single 64-bit value. The encoding stores: table ID, column ID, page ID and offset index (position of the string within the page). This avoids copying string data during intermediate execution. The actual string is reconstructed only when needed through `get_value()`, which:
-
-- handles regular pages with offsets
-
-- correctly assembles multi-page long strings (0xffff / 0xfffe markers)
-
-`Value_t` is a lightweight tagged union for execution It stores INT32 or SMART_STRING using bit-packed metadata, uses two low bits to encode type and supports null representation without variant overhead. It provides: `from_int32()` / `from_string()` constructors, safe accessors (`get_int32()`, `get_string()`) and `is_null()` for null checks.
-
-Together, Smart_string and value_t enable late materialization, minimizing string copies and improving performance throughout the execution engine.
+All optimizations are strictly internal. Any component using `Column_t` continues to operate identically, independent of how indices are translated or how pages are managed.
 
 #### Implementation Details
 
-- Smart_string Encoding
+**Polymorphic Column Architecture**
 
-  Smart_string packs four identifiers into a single 64-bit integer using bit shifts:
+- `Column_t` acts as a facade and owns a `std::unique_ptr` to an abstract column implementation
+- The abstract base class defines the minimal interface (`get_at`, `size`, `page_num`)
+- Concrete implementations (`ValueColumn`, `PageColumn`) override all storage-specific behavior
 
-  1. table_id
+At construction time, `Column_t` selects the concrete implementation based on the requested storage mode.  
+From that point onward, **all column operations are dispatched through the abstract interface**, ensuring runtime polymorphism.
 
-  2. column_id
+As a result:
 
-  3. page_id
+- Execution code never performs casts
+- Execution code never checks the storage type
+- Storage-specific logic is fully encapsulated
 
-  4. offset_idx (position of the string inside the page)
+This guarantees a stable API and isolates execution logic from storage layout decisions.
 
-  These fields are combined with bitwise OR operations, ensuring encoding/decoding is constant-time and requires no heap allocation.
+**Index Translation**
 
-- String Reconstruction
+- Index translation is handled internally by each concrete implementation
+- Page-based layouts are used to map a global index to `(pageIndex, offset)`
+- The mapping strategy differs per implementation but is completely hidden from callers
 
-  `get_value()` retrieves the original VARCHAR by navigating the column-store pages:
+This enables fast access while keeping indexing logic localized and optimized.
 
-  - For normal pages: it uses the offset table to compute the string's byte range directly.
+**Memory Ownership**
 
-  - For long strings: it detects the 0xffff/0xfffe markers and reconstructs the string by concatenating the segmented page contents.
-    This allows the engine to store only references during execution while still recovering the full string at output time.
+- In `ValueOwned` storage, the column allocates and owns its pages
+- In `PageOwned` storage, the column stores pointers to externally managed pages
+- Ownership semantics are enforced by construction and never checked at runtime
 
-- value_t Bit Layout
+**Error Handling**
 
-  value_t embeds the type tag in the lowest 2 bits:
+- Invalid index access returns `null_value()`
+- No exceptions are thrown
+- Behavior is deterministic and performance-friendly
 
-  | Type Tag (binary) | Meaning      |
-  | ----------------- | ------------ |
-  | **00**            | NULL         |
-  | **01**            | INT32        |
-  | **10**            | SMART_STRING |
-
-  The remaining 62 bits hold either:
-
-  - a 32-bit integer (shifted left), or
-
-  - the full Smart_string reference (with type bits masked out)
-
-  This design removes the need for `std::variant`, avoids dynamic memory, and ensures predictable CPU-friendly layouts.
-
-- Null Handling
-
-  A null value contains only the tag `NONE` with no payload.
-  All operators check `is_null()` before attempting extraction, allowing efficient propagation of NULLs across joins and scans.
+This design ensures predictable execution and avoids control-flow overhead in hot paths.
 
 #### Test Cases
 
-The materialization tests verify the correctness of the `Smart_string` and `value_t` implementations:
+The provided test validates the correctness of the **PageOwned** storage mode.
 
-- `Smart_string` Field Encoding/Decoding Ensures that `encode()` correctly packs `table_id`, `column_id`, `page_id`, and `offset_idx` into 64 bits and that the corresponding getters return the original values.
+Specifically, it:
 
-- Default `value_t` Behavior Confirms that a default-constructed `value_t` represents a NULL value and reports its type as `NONE`.
+- Creates two externally allocated `int32_t` pages
+- Pushes both pages into a `Column_t` constructed with `PageOwned` storage
+- Verifies that:
+  - the column reports the correct number of pages
+  - the total number of stored rows is correct
+  - values can be retrieved correctly across page boundaries using a global index
 
-- INT32 Storage and Retrieval Validates that `from_int32()` stores a 32-bit integer using the bit-packed format and that `get_int32()` recovers the exact original value.
+The test demonstrates that:
 
-- String Reference Handling Checks that wrapping a `Smart_string` inside `value_t` preserves all encoded fields and that `get_string()` returns a proper `Smart_string` instance.
+- `Column_t` correctly translates global indices to page-local offsets
+- No data copying occurs
+- Page-based access is transparent to the caller
 
-- Type Tag Bitmasking Ensures the lower two bits of `value_t::data` correctly encode the type tag for both INT32 and SMART_STRING values.
+### Parallel Building (Boutzounis Dimitrios - Nikolaos, Stavrou Spyridon)
 
-These tests confirm that the materialization layer behaves predictably, preserves data integrity, and maintains the correctness of the bit-packed encoding scheme.
+This part of the project focuses on the parallel construction phase. The goal of this phase is to efficiently build the underlying structure from a large set of input elements by exploiting thread-level parallelism, reducing total construction time compared to a purely sequential approach.
 
-### Column - store (Stephanou Iasonas)
-
-This part of the assignment replaces the intermediate row-store representation with a paginated column-store layout to improve cache locality and join performance.
-
-The `Column_t` structure stores values column-by-column across fixed-size pages:
-
-- Paged Storage
-
-  Each column consists of multiple `Page_t` blocks. The page index and offset inside the page are computed via bit shifting (`PAGE_SHIFT`, `PAGE_MASK`), enabling fast indexing.
-
-- Efficient Appends
-
-  `push_back()` appends values sequentially. When a page is full, a new `Page_t` is allocated. This reduces allocation overhead in tight join loops.
-
-- Fast Random Access
-
-  `get_at()` computes the correct page and offset to retrieve any value in O(1) time. Out-of-range accesses safely return NULL.
-
-- Predictable Memory Layout
-
-  Values of the same column are stored contiguously, improving cache usage and preparing the executor for parallel join processing in later assignments.
-
-This columnar format becomes the backbone for intermediate results produced by scans and joins, replacing all row-store structures in the execution engine.
+The building process is divided among multiple worker threads, each responsible for processing a subset of the input. To minimize synchronization overhead and contention, the implementation carefully manages memory allocation and insertion logic, ensuring that threads can operate largely independently. Once all threads complete their local work, the partial results are combined into a consistent final structure.
 
 #### Implementation Details
 
-- Paged Column Layout
+The building phase is implemented with an emphasis on parallelism, memory efficiency, and low synchronization overhead. It is primarily realized through the cooperation of three components: the parallel execution logic, a custom slab-based memory allocator, and an unchained hash-based structure.
 
-  - Each `Column_t` consists of a vector of fixed-size `Page_t` objects.
-  - Pages store values in a small, contiguous array (`values[]`), enabling cache-friendly sequential access.
+- Parallel Construction Logic
 
-- Indexing via Bit Operations
+  The building phase is orchestrated in `execute.cpp`. The input dataset is partitioned among multiple worker threads, with each thread responsible for inserting its assigned elements into the shared structure. Threads operate concurrently during construction, enabling efficient utilization of multi-core systems.
 
-  - Logical row indices are mapped to physical page locations using:
-    ```
-    pageIndex = index >> PAGE_SHIFT
-    offset = index & PAGE_MASK
-    ```
-  - These bit operations are faster than division/modulo and allow constant-time lookup.
+  Work distribution is static, ensuring that each thread processes a disjoint subset of the input. This approach minimizes coordination costs and avoids dynamic scheduling overhead during the build.
 
-- Dynamic Page Allocation
+- Unchained Data Structure
 
-  - `push_back()` inserts values sequentially.
-  - When the current page fills (`offset == 0`), a new page is added automatically.
-  - This reduces memory reallocations inside tight join loops.
+  Each bucket grows independently, allowing concurrent insertions across different buckets with minimal contention. This design is particularly well-suited for parallel builds, as it avoids fine-grained locking on individual elements and reduces pointer chasing during construction.
 
-- Fast Retrieval
+- Slab-Based Memory Allocation
 
-  - `get_at()` returns the value at a given index by directly resolving the page and offset.
-  - Out-of-bounds access yields a NULL `value_t`, ensuring safe behavior during join probing.
+  Memory management during the build phase is handled by a custom slab allocator (`slab_alloc.h`,`slab_alloc.cpp`). Rather than allocating memory per element using standard heap allocation, the slab allocator pre-allocates large memory blocks (slabs) and serves fixed-size objects from them.
 
-- Preallocation for Scans
+  This strategy offers several advantages during parallel construction:
 
-  - When a scan node knows its expected row count, the constructor preallocates all required pages:
-    ```
-    pages_needed = (expected_rows + PAGE_T_SIZE - 1) / PAGE_T_SIZE;
-    ```
-  - This avoids dynamic growth when the size is known, improving performance.
+  - Constant-time allocations for new elements
+  - Improved cache locality due to contiguous memory layout
+  - Reduced allocator contention across threads
 
-- Cache-friendly Columnar Organization
+  Each thread can obtain memory from slabs without frequent synchronization, making allocation scalable as the number of threads increases.
 
-  - Values of a single column are laid out contiguously across pages.
-  - This improves cache locality during joins, filters, and scans, as operators touch one column at a time.
+- Synchronization Strategy
+
+  Synchronization during the building phase is deliberately kept minimal. Threads insert elements independently, and shared state is only accessed when necessary (e.g., when extending bucket storage). By combining unchained buckets with slab-based allocation, the implementation **avoids locks** and relies on coarse-grained coordination at well-defined points.
+
+  This design ensures that the final structure is deterministic and equivalent to a sequential build, while achieving significantly better performance under parallel execution.
 
 #### Test Cases
 
-The tests verify the correctness, robustness, and performance behavior of the `Column_t` column-store implementation:
+The building phase is validated using a focused set of unit tests covering memory allocation, parallel tuple collection, and hash table construction.
 
-- Basic push/get behavior
+Allocator tests verify correct chunk initialization, bump allocation behavior, and proper cleanup, ensuring safe and efficient memory management during the build.
 
-  Ensures values inserted with `push_back()` can be retrieved accurately with `get_at()` when stored within a single page.
+Thread-level tests confirm that tuples are consistently assigned to the correct hash partitions, and that per-thread and global tuple counts are accurate.
 
-- Page boundary handling
+Partition-level tests validate the computation of prefix sums and buffer offsets, guaranteeing that each partition writes into a disjoint region of the global tuple buffer.
 
-  Confirms that new pages are allocated automatically once the current page is full, and that values across page boundaries are retrieved correctly.
+Finally, post-processing tests ensure that tuples from multiple threads are copied correctly, directory entries define valid non-overlapping ranges per hash slot, and the final unchained structure matches the expected build output.
 
-- Out-of-bounds safety
+Together, these tests ensure that the parallel building phase is correct, deterministic, and safe for subsequent probe operations.
 
-  Validates that any invalid index (negative, too large, or empty column) returns a NULL `value_t` instead of causing undefined behavior.
+### Parallel Probing (Stephanou Iasonas)
 
-- NULL value handling
+This component implements the **probe phase of a parallel hash join** using a **work-stealing execution model**.  
+The goal is to maximize parallelism and load balance while avoiding synchronization overhead during result production.
 
-  Checks that `Column_t` stores and retrieves NULLs correctly, preserving type information throughout.
+Each worker thread dynamically acquires work and writes results exclusively to thread-local buffers. The final result is materialized only after all workers complete.
 
-- Multi-page stress tests
+**Core Idea**
 
-  Exercises insertion and retrieval across many pages (e.g., 3+ full pages), verifying correctness of indexing logic and bit-shift calculations.
+> No thread owns a fixed partition of the probe input; instead, work is claimed dynamically.
 
-- Randomized tests
-
-  Inserts random mixes of integers and NULLs, comparing results against a ground truth vector to ensure reliability under non-uniform workloads.
-
-- High-volume tests (millions of rows)
-
-  Ensures that the column store scales properly, allocating dozens of pages and still maintaining constant-time, correct access.
-
-These tests collectively ensure that the column-store implementation is safe, correct, and performant under realistic database workloads.
-
-### Unchained Hashing (Boutzounis Dimitrios - Nikolaos, Stavrou Spyridon)
-
-This part implements the Unchained Hash Table, a high-performance structure optimized for database join processing.
-
-Key Ideas:
-
-- Contiguous buffer storage
-
-  All `(key, row_id)` pairs are stored in one linear array, grouped by hash prefix. This avoids pointer chasing and improves cache efficiency.
-
-- Directory with Bloom-style tags
-
-  Each directory entry stores a prefix range and a 16-bit tag that quickly filters out non-matching probe keys. Tags are precomputed bit patterns with four bits set.
-
-- Fast hashing
-
-  Uses hardware-accelerated CRC32 when available (`fast_crc32_u32`), producing high-quality 64-bit hashes (`hash32`).
-
-Build & Lookup:
-
-- Build phase:
-
-  1. `key_count()` counts how many keys fall into each prefix.
-
-  2. `build()` allocates the contiguous buffer and computes prefix boundaries.
-
-  3. `insert()` writes each tuple and updates the tag for its slot.
-
-- Lookup:
-
-  `lookup()` checks the Bloom tag via `could_contain()`; if it passes, it scans only the small contiguous range belonging to that prefix.
-
-This design delivers fast, predictable, and memory-efficient join performance, especially for selective queries.
+A shared atomic counter represents the next unprocessed probe index. Workers repeatedly claim chunks of work until all probe tuples are processed. This allows the system to naturally balance load even in the presence of data skew.
 
 #### Implementation Details
 
-**Hashing**
+1. **Thread-Local Result Allocation**  
+   Each worker is assigned its own local result buffer. These buffers mirror the output schema and are pre-initialized before execution begins.
 
-- Uses `fast_crc32_u32()` to compute CRC32-based hashes.
+2. **Worker Creation**  
+   A fixed number of worker threads are spawned. All workers execute the same probe logic.
 
-- `hash32()` mixes the CRC result with a fixed 64-bit constant to produce a stable, high-entropy hash value.
+3. **Dynamic Work Claiming**  
+   Workers atomically claim ranges of probe indices. This ensures:
 
-- The upper bits of the hash determine the slot (prefix group), while lower bits are used to select a Bloom tag.
+   - no overlapping work
+   - no locks
+   - minimal scheduling overhead
 
-**Directory Layout**
+4. **Probe and Match Expansion**  
+   For each claimed probe tuple:
 
-- The `directory` vector stores a 64-bit entry per slot:
+   - the join key is extracted
+   - the hash table is probed
+   - all matching build-side rows are expanded
+   - output rows are written only to the worker’s local buffer
 
-  - Upper 48 bits: cumulative count of keys up to this slot (defines the tuple range).
-  - Lower 16 bits: Bloom-style tag used for early filtering.
+5. **Result Materialization**  
+   After all workers finish, their local results are merged into the final output in a single-threaded phase.
 
-- Prefix ranges are created during `build()` using prefix sums on the counted keys.
+**Work-Stealing Characteristics**
 
-**Bloom Tags**
+- **Dynamic scheduling** avoids idle threads
+- **Chunk-based processing** amortizes atomic operations
+- **No shared writes** during the probe phase
+- **Lock-free hot path**
 
-- `tags[2048]` holds a set of precomputed 16-bit bitmasks, each with exactly four bits set.
+**Result Handling Strategy**
 
-- During insertion, the tag corresponding to the hash s tag index is OR ed into the directory entry.
+The merge phase:
 
-- `could_contain()` checks:
-  ```
-  !(tag & ~entry_tag)
-  ```
-  allowing extremely fast rejection of keys that cannot match.
+- runs after all workers join
+- reads immutable local buffers
+- produces a deterministic final result
 
-**Count, Build, Insert Pipeline**
-
-1. `key_count()`
-
-   Computes the hash prefix and increments its counter; also tracks total tuple count.
-
-2. `build()`
-
-   Allocates the contiguous `buffer` sized to `total_count` and computes prefix boundaries in the directory.
-
-3. `insert()`
-
-   Places each `(key, row_id)` into its exact location within the buffer, while updating the directory s Bloom tag.
-
-**Lookup Path**
-
-- `lookup()` computes the hash, identifies the slot, and loads the directory entry.
-
-- If `could_contain()` fails, lookup exits immediately (fast negative path).
-
-- Otherwise, `produce_matches()` scans only the small contiguous region belonging to that hash prefix and returns matching row IDs.
-
-**Design Benefits**
-
-- No pointer chasing; all tuples stored contiguously in `buffer`.
-
-- Prefix ranges guarantee tight, cache-friendly scans.
-
-- Tag filtering minimizes unnecessary comparisons during probing.
-
-- Structure remains robust even under skewed or repetitive join keys.
+This separation simplifies correctness reasoning and keeps the hot path fast.
 
 #### Test Cases
-
-The unit tests validate the correctness, stability, and filtering behavior of the Unchained hash table implementation:
-
-- Counting and Build Phase
-
-  Tests ensure that `key_count()` correctly tracks prefix frequencies and that build() allocates the buffer and computes directory prefix sums as expected.
-
-- Manual Insertion and Lookup
-
-  Verifies that lookups return the correct row IDs when the directory and buffer are manually constructed, and that Bloom-style tag mismatches prevent false positives.
-
-- Basic Insert and Lookup
-
-  Confirms that `insert()` correctly places keys into the contiguous buffer and that `lookup()` retrieves the correct matches or returns an empty result for missing keys.
-
-- Collision Handling
-
-  Checks that multiple keys hashing to the same slot are stored sequentially in the slot’s range and retrieved in the correct order.
-
-- Tag Filtering Behavior
-
-  Ensures that Bloom tag checks (`could_contain()`) correctly filter out non-matching keys before scanning, minimizing unnecessary buffer probes.
-
-- Insertion Order Preservation
-
-  Validates that keys inserted for the same slot appear in buffer order, enabling deterministic join output ordering within each prefix group.
-
-- Stress Tests
-
-  Inserts and queries dozens of keys to confirm stable behavior across many prefix slots and ensure the implementation handles broader workloads without failure.
 
 ### Statistics
-
-- **Optimization Across Tasks vs Base**
-
-| Implementation Stage | Runtime (ms) | Speedup vs Base | Total Time Reduction | Speedup vs Previous Step | Incremental Reduction |
-| :------------------- | :----------- | :-------------- | :------------------- | :----------------------- | :-------------------- |
-| Base                 | 144565.6     | 1.00x           | 0.00%                | 1.00x                    | 0.00%                 |
-| Late Materialization | 96493.8      | 1.50x           | 33.25%               | 1.50x                    | 33.25%                |
-| Columnar Joins       | 47579.6      | 3.04x           | 67.09%               | 2.03x                    | 50.69%                |
-| Unchained Hashtable  | 38530.8      | 3.75x           | 73.35%               | 1.23x                    | 19.02%                |
-
-- **Optimization Across Tasks vs Robin Hood**
-
-| Implementation Stage | Runtime (ms) | Speedup vs Robin Hood | Total Time Reduction | Speedup vs Previous Step | Incremental Reduction |
-| :------------------- | :----------- | :-------------------- | :------------------- | :----------------------- | :-------------------- |
-| Robin Hood           | 210915       | 1.00x                 | 0.00%                | 1.00x                    | 0.00%                 |
-| Late Materialization | 163745.4     | 1.29x                 | 22.36%               | 1.29x                    | 22.36%                |
-| Columnar Joins       | 112482.6     | 1.88x                 | 46.67%               | 1.46x                    | 31.31%                |
-| Unchained Hashtable  | 38530.8      | 5.47x                 | 81.73%               | 2.92x                    | 65.75%                |
-
-- **Optimization Across Tasks vs Hopscotch**
-
-| Implementation Stage | Runtime (ms) | Speedup vs Hopscotch | Total Time Reduction | Speedup vs Previous Step | Incremental Reduction |
-| :------------------- | :----------- | :------------------- | :------------------- | :----------------------- | :-------------------- |
-| Hopscotch            | 134655       | 1.00x                | 0.00%                | 1.00x                    | 0.00%                 |
-| Late Materialization | 86432.4      | 1.56x                | 35.81%               | 1.56x                    | 35.81%                |
-| Columnar Joins       | 35225.8      | 3.82x                | 73.84%               | 2.45x                    | 59.24%                |
-| Unchained Hashtable  | 38530.8      | 3.49x                | 71.39%               | 0.91x                    | -9.38%                |
-
-- **Optimization Across Tasks vs Cuckoo**
-
-| Implementation Stage | Runtime (ms) | Speedup vs Cuckoo | Total Time Reduction | Speedup vs Previous Step | Incremental Reduction |
-| :------------------- | :----------- | :---------------- | :------------------- | :----------------------- | :-------------------- |
-| Cuckoo               | 138509       | 1.00x             | 0.00%                | 1.00x                    | 0.00%                 |
-| Late Materialization | 90346.8      | 1.53x             | 34.77%               | 1.53x                    | 34.77%                |
-| Columnar Joins       | 38213.2      | 3.62x             | 72.41%               | 2.36x                    | 57.70%                |
-| Unchained Hashtable  | 38530.8      | 3.59x             | 72.18%               | 0.99x                    | -0.83%                |
-
-The results show how each part of the assignment gradually improves the performance of the base solution. Late materialization gives the first noticeable boost, cutting runtime by about 33% by avoiding unnecessary string copies. Switching to columnar joins has the biggest impact, more than doubling the speed compared to the previous step and reducing total runtime by 67% thanks to better cache use and more efficient memory access. The unchained hash table offers another 19% improvement, bringing the total speedup to 3.75× over the original version. Even though this part already helps, it has much more optimization potential, especially once threading and parallel join processing are added in the next assignment.
 
 ## Compile and Run
 
