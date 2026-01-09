@@ -54,15 +54,15 @@ struct JoinAlgorithm {
         for (const auto& p : params_per_partition) total_tuples += p.tuple_count;
         hash_table.allocate_tuple_storage(total_tuples);
 
-        std::vector<std::thread> workers;
-        workers.reserve(num_threads);
+        std::vector<std::thread> workers_build;
+        workers_build.reserve(num_threads);
         for (uint32_t tid = 0; tid < num_threads; tid++) {
-            workers.emplace_back([&, tid]() {
+            workers_build.emplace_back([&, tid]() {
                 for (uint32_t p = tid; p < num_partitions; p += num_threads) hash_table.post_process_build(collected, params_per_partition[p], p);
             });
         }
 
-        for (auto& t : workers) t.join();
+        for (auto& t : workers_build) t.join();
 
         for (auto& t : collected.threads) {
             if (t) free_bump_alloc(t->level2);
@@ -75,18 +75,18 @@ struct JoinAlgorithm {
         }
 
         std::atomic<size_t> next_probe{0};
-        std::vector<std::thread> workers;
-        workers.reserve(num_threads);
+        std::vector<std::thread> workers_probe;
+        workers_probe.reserve(num_threads);
 
         const size_t probe_size = probe_table[0].size();
         size_t chunk = std::max<size_t>(1, (probe_size + num_threads * 4 - 1) / (num_threads * 4));
 
         for (size_t tid = 0; tid < num_threads; ++tid) {
-            workers.emplace_back(&JoinAlgorithm::probe_worker<int32_t>, this, std::ref(next_probe), std::ref(local_results[tid]), std::ref(left),
-                                 std::ref(right), std::ref(build_table), std::ref(probe_table), std::ref(hash_table), std::cref(output_attrs), probe_col,
-                                 build_left, probe_size, chunk);
+            workers_probe.emplace_back(&JoinAlgorithm::probe_worker<int32_t>, this, std::ref(next_probe), std::ref(local_results[tid]), std::ref(left),
+                                       std::ref(right), std::ref(build_table), std::ref(probe_table), std::ref(hash_table), std::cref(output_attrs), probe_col,
+                                       build_left, probe_size, chunk);
         }
-        for (auto& t : workers) t.join();
+        for (auto& t : workers_probe) t.join();
 
         for (size_t tid = 0; tid < num_threads; ++tid) {
             auto& src = local_results[tid];
