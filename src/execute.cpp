@@ -68,20 +68,63 @@ struct JoinAlgorithm {
             if (t) free_bump_alloc(t->level2);
         }
 
-        for (size_t probe_idx = 0; probe_idx < probe_table[0].size(); probe_idx++) {
-            auto smart_key = extract_key<T>(probe_table[probe_col].get_at(probe_idx));
-            if (!smart_key) continue;
-            const T& key = *smart_key;
-            if (auto itr_vec = hash_table.lookup(static_cast<int32_t>(key)); itr_vec.size() != 0) {
-                for (auto build_idx : itr_vec) {
-                    size_t out_idx = 0;
-                    for (auto [col_idx, _] : output_attrs) {
-                        if (col_idx < left.size()) {
-                            size_t row = build_left ? build_idx : probe_idx;
-                            results[out_idx++].push_back(left[col_idx].get_at(row));
-                        } else {
-                            size_t row = build_left ? probe_idx : build_idx;
-                            results[out_idx++].push_back(right[col_idx - left.size()].get_at(row));
+        std::vector<ExecuteResult> local_results(num_threads);
+
+        for (auto& res : local_results) {
+            res.resize(output_attrs.size());
+        }
+
+        std::atomic<size_t> next_probe{0};
+        std::vector<std::thread> workers;
+        workers.reserve(num_threads);
+
+        const size_t probe_size = probe_table[0].size();
+        size_t chunk = std::max<size_t>(1, (probe_size + num_threads * 4 - 1) / (num_threads * 4));
+
+        for (size_t tid = 0; tid < num_threads; ++tid) {
+            workers.emplace_back(&JoinAlgorithm::probe_worker<int32_t>, this, std::ref(next_probe), std::ref(local_results[tid]), std::ref(left),
+                                 std::ref(right), std::ref(build_table), std::ref(probe_table), std::ref(hash_table), std::cref(output_attrs), probe_col,
+                                 build_left, probe_size, chunk);
+        }
+        for (auto& t : workers) t.join();
+
+        for (size_t tid = 0; tid < num_threads; ++tid) {
+            auto& src = local_results[tid];
+
+            for (size_t col = 0; col < src.size(); ++col) {
+                const size_t n = src[col].size();
+                for (size_t i = 0; i < n; ++i) {
+                    results[col].push_back(src[col].get_at(i));
+                }
+            }
+        }
+        return &results;
+    }
+    template <class T>
+    void probe_worker(std::atomic<size_t>& next_probe, ExecuteResult& local_results, ExecuteResult& left, ExecuteResult& right, ExecuteResult& build_table,
+                      ExecuteResult& probe_table, Unchained& hash_table, const std::vector<std::tuple<size_t, DataType>>& output_attrs, size_t probe_col,
+                      size_t build_left, size_t probe_size, size_t chunk) {
+        while (true) {
+            size_t start = next_probe.fetch_add(chunk);
+            if (start >= probe_size) break;
+
+            size_t end = std::min(start + chunk, probe_size);
+
+            for (size_t probe_idx = start; probe_idx < end; probe_idx++) {
+                auto smart_key = extract_key<T>(probe_table[probe_col].get_at(probe_idx));
+                if (!smart_key) continue;
+                const T& key = *smart_key;
+                if (auto itr_vec = hash_table.lookup(static_cast<int32_t>(key)); itr_vec.size() != 0) {
+                    for (auto build_idx : itr_vec) {
+                        size_t out_idx = 0;
+                        for (auto [col_idx, _] : output_attrs) {
+                            if (col_idx < left.size()) {
+                                size_t row = build_left ? build_idx : probe_idx;
+                                local_results[out_idx++].push_back(left[col_idx].get_at(row));
+                            } else {
+                                size_t row = build_left ? probe_idx : build_idx;
+                                local_results[out_idx++].push_back(right[col_idx - left.size()].get_at(row));
+                            }
                         }
                     }
                 }
