@@ -10,8 +10,6 @@
 namespace Contest {
 
 using ExecuteResult = std::vector<Column_t>;
-#define CHUNK 1024
-#define WORKERS_NUM 10
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx);
 
@@ -29,7 +27,6 @@ struct JoinAlgorithm {
         if (v.is_null()) return std::nullopt;
         return std::nullopt;
     }
-
 
     template <class T>
     auto run() {
@@ -59,41 +56,30 @@ struct JoinAlgorithm {
             const T& key = *smart_key;
             hash_table.insert(static_cast<int32_t>(key), idx);
         }
-        
 
-        std::vector<ExecuteResult> local_results(WORKERS_NUM);
-       
+        uint32_t num_threads = static_cast<uint32_t>(std::thread::hardware_concurrency());
+
+        std::vector<ExecuteResult> local_results(num_threads);
+
         for (auto& res : local_results) {
             res.resize(output_attrs.size());
         }
 
         std::atomic<size_t> next_probe{0};
         std::vector<std::thread> workers;
-        workers.reserve(WORKERS_NUM);
+        workers.reserve(num_threads);
 
         const size_t probe_size = probe_table[0].size();
-        for (size_t tid = 0; tid < WORKERS_NUM; ++tid) {
-            workers.emplace_back(
-                &JoinAlgorithm::probe_worker<int32_t>,
-                this,
-                std::ref(next_probe),
-                std::ref(local_results[tid]),
-                std::ref(left),
-                std::ref(right),
-                std::ref(build_table),
-                std::ref(probe_table),
-                std::ref(hash_table),
-                std::cref(output_attrs),
-                probe_col,
-                build_left,
-                probe_size
-            );
+        size_t chunk = std::max<size_t>(1, (probe_size + num_threads * 4 - 1) / (num_threads * 4));
+
+        for (size_t tid = 0; tid < num_threads; ++tid) {
+            workers.emplace_back(&JoinAlgorithm::probe_worker<int32_t>, this, std::ref(next_probe), std::ref(local_results[tid]), std::ref(left),
+                                 std::ref(right), std::ref(build_table), std::ref(probe_table), std::ref(hash_table), std::cref(output_attrs), probe_col,
+                                 build_left, probe_size, chunk);
         }
-        for (auto& t : workers)
-            t.join();
+        for (auto& t : workers) t.join();
 
-
-        for (size_t tid = 0; tid < WORKERS_NUM; ++tid) {
+        for (size_t tid = 0; tid < num_threads; ++tid) {
             auto& src = local_results[tid];
 
             for (size_t col = 0; col < src.size(); ++col) {
@@ -106,24 +92,14 @@ struct JoinAlgorithm {
         return &results;
     }
     template <class T>
-    void probe_worker(
-        std::atomic<size_t>& next_probe,
-        ExecuteResult& local_results,
-        ExecuteResult& left,
-        ExecuteResult& right,
-        ExecuteResult& build_table,
-        ExecuteResult& probe_table,
-        Unchained & hash_table,
-        const std::vector<std::tuple<size_t, DataType>>& output_attrs,
-        size_t probe_col,
-        size_t build_left,
-        size_t probe_size
-        ){
+    void probe_worker(std::atomic<size_t>& next_probe, ExecuteResult& local_results, ExecuteResult& left, ExecuteResult& right, ExecuteResult& build_table,
+                      ExecuteResult& probe_table, Unchained& hash_table, const std::vector<std::tuple<size_t, DataType>>& output_attrs, size_t probe_col,
+                      size_t build_left, size_t probe_size, size_t chunk) {
         while (true) {
-            size_t start = next_probe.fetch_add(CHUNK);
+            size_t start = next_probe.fetch_add(chunk);
             if (start >= probe_size) break;
 
-            size_t end = std::min(start + CHUNK, probe_size);
+            size_t end = std::min(start + chunk, probe_size);
 
             for (size_t probe_idx = start; probe_idx < end; probe_idx++) {
                 auto smart_key = extract_key<T>(probe_table[probe_col].get_at(probe_idx));
@@ -147,7 +123,6 @@ struct JoinAlgorithm {
         }
     }
 };
-   
 
 template <>
 inline std::optional<int32_t> JoinAlgorithm::extract_key<int32_t>(const value_t& v) const {
@@ -191,7 +166,7 @@ static bool column_has_nulls(const Column& column) {
     for (const auto& page_ptr : column.pages) {
         auto* page = page_ptr->data;
 
-        uint16_t num_rows     = *reinterpret_cast<uint16_t*>(page + 0);
+        uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
         uint16_t num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
 
         if (num_non_null < num_rows) {
@@ -201,18 +176,14 @@ static bool column_has_nulls(const Column& column) {
     return false;
 }
 
-ExecuteResult copy_scan_materialization(
-    const Plan& plan,
-    const ColumnarTable& table,
-    const std::vector<std::tuple<size_t, DataType>>& output_attrs,
-    uint8_t table_id
-) {
+ExecuteResult copy_scan_materialization(const Plan& plan, const ColumnarTable& table, const std::vector<std::tuple<size_t, DataType>>& output_attrs,
+                                        uint8_t table_id) {
     ExecuteResult results;
     results.reserve(output_attrs.size());
 
     std::vector<bool> has_nulls(output_attrs.size());
 
-    //detect collumns with nulls
+    // detect collumns with nulls
     for (size_t i = 0; i < output_attrs.size(); ++i) {
         size_t in_col_idx = std::get<0>(output_attrs[i]);
         const auto& column = table.columns[in_col_idx];
@@ -241,72 +212,67 @@ ExecuteResult copy_scan_materialization(
                 auto* page = column.pages[page_id]->data;
 
                 switch (column.type) {
+                    case DataType::INT32: {
+                        uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
+                        auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
 
-                case DataType::INT32: {
-                    uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
-                    auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
-
-                    if (!has_nulls[column_idx]) {
-                        results[column_idx].push_page(data_begin, num_rows);
-                        break;
-                    }
-
-                    auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
-
-                    uint16_t data_idx = 0;
-                    for (uint16_t i = 0; i < num_rows; ++i) {
-                        if (get_bitmap(bitmap, i)) {
-                            results[column_idx].push_back(
-                                v.from_int32(data_begin[data_idx++])
-                            );
-                        } else {
-                            results[column_idx].push_back(v.null_value());
+                        if (!has_nulls[column_idx]) {
+                            results[column_idx].push_page(data_begin, num_rows);
+                            break;
                         }
-                    }
-                    break;
-                }
 
-                case DataType::VARCHAR: {
-                    uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
+                        auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
 
-                    if (num_rows == 0xffff) {
-                        Smart_string s;
-                        s = s.encode(table_id, in_col_idx, page_id, 0);
-                        results[column_idx].push_back(v.from_string(s));
+                        uint16_t data_idx = 0;
+                        for (uint16_t i = 0; i < num_rows; ++i) {
+                            if (get_bitmap(bitmap, i)) {
+                                results[column_idx].push_back(v.from_int32(data_begin[data_idx++]));
+                            } else {
+                                results[column_idx].push_back(v.null_value());
+                            }
+                        }
                         break;
                     }
 
-                    if (num_rows == 0xfffe) {
-                        continue;
-                    }
+                    case DataType::VARCHAR: {
+                        uint16_t num_rows = *reinterpret_cast<uint16_t*>(page + 0);
 
-                    uint16_t num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
-                    auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
-                    auto* data_begin =
-                        reinterpret_cast<char*>(page + 4 + num_non_null * 2);
-                    auto* string_begin = data_begin;
-                    auto* bitmap =
-                        reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
-
-                    uint16_t data_idx = 0;
-                    for (uint16_t i = 0; i < num_rows; ++i) {
-                        if (get_bitmap(bitmap, i)) {
-                            uint16_t offset = offset_begin[data_idx];
-
+                        if (num_rows == 0xffff) {
                             Smart_string s;
-                            s = s.encode(table_id, in_col_idx, page_id, data_idx++);
+                            s = s.encode(table_id, in_col_idx, page_id, 0);
                             results[column_idx].push_back(v.from_string(s));
-
-                            string_begin += offset;
-                        } else {
-                            results[column_idx].push_back(v.null_value());
+                            break;
                         }
-                    }
-                    break;
-                }
 
-                default:
-                    break;
+                        if (num_rows == 0xfffe) {
+                            continue;
+                        }
+
+                        uint16_t num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
+                        auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
+                        auto* data_begin = reinterpret_cast<char*>(page + 4 + num_non_null * 2);
+                        auto* string_begin = data_begin;
+                        auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+
+                        uint16_t data_idx = 0;
+                        for (uint16_t i = 0; i < num_rows; ++i) {
+                            if (get_bitmap(bitmap, i)) {
+                                uint16_t offset = offset_begin[data_idx];
+
+                                Smart_string s;
+                                s = s.encode(table_id, in_col_idx, page_id, data_idx++);
+                                results[column_idx].push_back(v.from_string(s));
+
+                                string_begin += offset;
+                            } else {
+                                results[column_idx].push_back(v.null_value());
+                            }
+                        }
+                        break;
+                    }
+
+                    default:
+                        break;
                 }
             }
         }
