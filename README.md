@@ -89,49 +89,60 @@ The building process is divided among multiple worker threads, each responsible 
 
 #### Implementation Details
 
-The building phase is implemented with an emphasis on parallelism, memory efficiency, and low synchronization overhead. It is primarily realized through the cooperation of three components: the parallel execution logic, a custom slab-based memory allocator, and an unchained hash-based structure.
+The construction process consists of three distinct phases:
 
-- Parallel Construction Logic
+**1.** Parallel Tuple Collection & Partitioning
 
-  The building phase is orchestrated in `execute.cpp`. The input dataset is partitioned among multiple worker threads, with each thread responsible for inserting its assigned elements into the shared structure. Threads operate concurrently during construction, enabling efficient utilization of multi-core systems.
+Instead of building a shared global structure immediately (which would require expensive locking), threads first collect and partition tuples locally.
 
-  Work distribution is static, ensuring that each thread processes a disjoint subset of the input. This approach minimizes coordination costs and avoids dynamic scheduling overhead during the build.
+- Three-Level Slab Allocator: To mitigate `malloc` contention and system call overhead, we implemented a custom memory allocator defined in `slab_alloc.h`.
 
-- Unchained Data Structure
+  - Level 1 (Global): A large arena allocator (`GlobalAllocator`) that reserves a massive block of memory upfront.
 
-  Each bucket grows independently, allowing concurrent insertions across different buckets with minimal contention. This design is particularly well-suited for parallel builds, as it avoids fine-grained locking on individual elements and reduces pointer chasing during construction.
+  - Level 2 (Thread-Local): Each thread requests large chunks (`LARGE_CHUNK`) from the global allocator.
 
-- Slab-Based Memory Allocation
+  - Level 3 (Partition-Local): Threads distribute memory from their large chunks into smaller, partition-specific buffers (`SMALL_CHUNK`).
 
-  Memory management during the build phase is handled by a custom slab allocator (`slab_alloc.h`,`slab_alloc.cpp`). Rather than allocating memory per element using standard heap allocation, the slab allocator pre-allocates large memory blocks (slabs) and serves fixed-size objects from them.
+- Partitioning: As tuples are scanned from the input column, they are hashed. The highest bits of the hash determine the partition index. Tuples are materialized into the corresponding Level 3 buffer using a `BuildTuple` structure.
 
-  This strategy offers several advantages during parallel construction:
+- Outcome: At the end of this phase, all build-side tuples are materialized and grouped by partition across thread-local buffers.
 
-  - Constant-time allocations for new elements
-  - Improved cache locality due to contiguous memory layout
-  - Reduced allocator contention across threads
+**2.** Global Sizing (Synchronization Point)
 
-  Each thread can obtain memory from slabs without frequent synchronization, making allocation scalable as the number of threads increases.
+Once all threads finish collection, a lightweight synchronization step occurs in `Unchained::counting_per_partition`.
 
-- Synchronization Strategy
+- We calculate the total number of tuples per partition by aggregating counts from all `ThreadAllocator` instances.
 
-  Synchronization during the building phase is deliberately kept minimal. Threads insert elements independently, and shared state is only accessed when necessary (e.g., when extending bucket storage). By combining unchained buckets with slab-based allocation, the implementation **avoids locks** and relies on coarse-grained coordination at well-defined points.
+- We compute global offsets for each partition to ensure they map to contiguous regions in the final tuple storage.
 
-  This design ensures that the final structure is deterministic and equivalent to a sequential build, while achieving significantly better performance under parallel execution.
+- A single contiguous memory block (`Unchained::buffer`) is allocated to hold the final hash table entries.
+
+**3.** Parallel Directory Construction & Materialization
+
+The final build phase populates the `directory` (the hash table index) and the buffer (the tuple storage).
+
+- Dynamic Load Balancing: We employ a dynamic task assignment strategy using an `std::atomic<uint32_t>`. Threads fetch the next available partition index to process. This ensures that if some partitions are heavier than others (skew), threads finishing early can "steal" remaining work, keeping all cores utilized.
+
+- Two-Pass Construction (per Partition): inside `post_process_build`:
+
+  - Counting & Histogram: The thread iterates over all tuple chunks for the assigned partition. It updates the `directory` slots to count how many tuples fall into each hash bucket. A prefix sum is applied to these directory entries to convert counts into absolute offsets within the global buffer.
+
+  - Materialization & Tagging: The thread iterates the tuples a second time. It copies the data (`key` and `row_id`) into the global `buffer` at the calculated offsets. Simultaneously, it computes the Bloom Filter Tag (derived from the hash) and embeds it into the upper bits of the directory pointer.
 
 #### Test Cases
 
-The building phase is validated using a focused set of unit tests covering memory allocation, parallel tuple collection, and hash table construction.
+The test cases include a comprehensive suite of unit tests in order to ensure the correctness of the parallel build phases:
 
-Allocator tests verify correct chunk initialization, bump allocation behavior, and proper cleanup, ensuring safe and efficient memory management during the build.
+- Memory Allocator Integrity: Validates the `GlobalAllocator` and `BumpAlloc` to ensure memory chunks are correctly initialized, linked, and handed out to threads without corruption.
 
-Thread-level tests confirm that tuples are consistently assigned to the correct hash partitions, and that per-thread and global tuple counts are accurate.
+- Partitioning Correctness: Verifies that `ThreadAllocator` correctly assigns tuples to partitions based on the highest bits of the hash, and that `collect_build_tuples` accurately aggregates total counts across multiple threads.
 
-Partition-level tests validate the computation of prefix sums and buffer offsets, guaranteeing that each partition writes into a disjoint region of the global tuple buffer.
+- Offset Calculation: Checks `counting_per_partition` to ensure it correctly computes global prefix sums, determining the exact memory offsets for each partition in the final buffer.
 
-Finally, post-processing tests ensure that tuples from multiple threads are copied correctly, directory entries define valid non-overlapping ranges per hash slot, and the final unchained structure matches the expected build output.
+- Parallel Materialization: Tests `post_process_build` to confirm that:
 
-Together, these tests ensure that the parallel building phase is correct, deterministic, and safe for subsequent probe operations.
+  - Tuples are correctly copied from thread-local buffers to the final contiguous storage.
+  - Directory entries are updated to point to the correct, disjoint ranges of tuples (handling hash collisions correctly).
 
 ### Parallel Probing (Stephanou Iasonas)
 
@@ -189,9 +200,28 @@ The merge phase:
 
 This separation simplifies correctness reasoning and keeps the hot path fast.
 
-#### Test Cases
-
 ### Statistics
+
+#### Performance Optimization Progression
+
+| Implementation Stage              | Runtime (ms) | Speedup vs Baseline | Total Time Reduction | Speedup vs Previous Step | Incremental Reduction |
+| --------------------------------- | ------------ | ------------------- | -------------------- | ------------------------ | --------------------- |
+| Baseline (Unchained hash default) | 38.668       | 1.00x               | 0.00%                | 1.00x                    | 0.00%                 |
+| Index Optimization                | 26.470       | 1.46x               | 31.55%               | 1.46x                    | 31.55%                |
+| Parallel Building                 | 26.081       | 1.48x               | 32.55%               | 1.01x                    | 1.47%                 |
+| Parallel Probing                  | 11.242       | 3.44x               | 70.93%               | 2.32x                    | 56.90%                |
+
+- Impact of Index Optimization:
+
+  Optimizing the indexing step to avoid unnecessary copying for integer columns without nulls resulted in a significant **31.55%** reduction in runtime. This demonstrates that memory bandwidth and allocation overhead were major initial bottlenecks.
+
+- Parallel Building Efficiency:
+
+  The **1.47%** incremental improvement reflects the asymmetric nature of hash joins, where the build side is typically much smaller than the probe side. While the absolute time reduction is minor for this dataset size, parallelizing the build phase ensures the system remains scalable and prevents the build step from becoming a bottleneck on larger workloads.
+
+- Dominance of Parallel Probing:
+
+  The most dramatic performance leap occurred with Parallel Probing, which slashed the remaining runtime by nearly **57%**. This confirms that the probe phase is the dominant cost in the join operation (the "hot path") and scales excellently with the number of threads, achieving a final **3.44x** speedup over the baseline.
 
 ## Compile and Run
 

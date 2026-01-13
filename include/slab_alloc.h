@@ -91,7 +91,7 @@ struct CollectedTuples {
 template <typename Column>
 CollectedTuples collect_build_tuples(const Column& build_column, size_t num_rows, uint32_t num_threads, uint32_t num_partitions) {
     uint64_t tuples_per_thread = (num_rows + num_threads - 1) / num_threads;
-    uint64_t l3_bytes = tuples_per_thread * sizeof(BuildTuple) * 2;
+    uint64_t l3_bytes = tuples_per_thread * sizeof(BuildTuple);
     uint64_t l2_bytes = num_partitions * (sizeof(Chunk) + SMALL_CHUNK);
     uint64_t per_thread_bytes = l3_bytes + l2_bytes + LARGE_CHUNK;
     uint8_t* global_base = static_cast<uint8_t*>(std::malloc(per_thread_bytes * num_threads));
