@@ -16,7 +16,14 @@ Unchained::Unchained(uint64_t shift) : total_count(0), shift(shift) {
     while (k < 2048) tags[k++] = tags[dist(rng)];
 }
 
-void Unchained::allocate_tuple_storage(uint64_t total_tuples) { buffer.assign(static_cast<size_t>(total_tuples), Bucket{}); }
+Unchained::~Unchained() {
+    if (buffer) std::free(buffer);
+}
+
+void Unchained::allocate_tuple_storage(uint64_t total_tuples) {
+    buffer = static_cast<Bucket*>(std::malloc(total_tuples * sizeof(Bucket)));
+    total_count = total_tuples;
+}
 
 bool Unchained::could_contain(uint16_t entry, uint64_t hash) {
     uint16_t slot = static_cast<uint32_t>(hash) >> TAG_SHIFT;
@@ -41,7 +48,7 @@ void Unchained::key_count(int32_t key) {
 }
 
 void Unchained::build() {
-    buffer.assign(total_count, Bucket{});
+    buffer = static_cast<Bucket*>(std::malloc(total_count * sizeof(Bucket)));
     directory[0] |= static_cast<uint64_t>(count[0][0]) << 16;
     for (size_t i = 1; i < count.size(); i++) directory[i] |= ((directory[i - 1] >> 16) + count[i][0]) << 16;
 }
@@ -67,7 +74,7 @@ std::vector<PartitionParams> Unchained::counting_per_partition(const CollectedTu
     std::vector<uint64_t> partition_offsets(collected.num_partitiions + 1, 0);
     for (uint32_t p = 0; p < collected.num_partitiions; ++p) partition_offsets[p + 1] = partition_offsets[p] + partition_counts[p];
 
-    size_t log2_partitions = std::log2(collected.num_partitiions);
+    size_t log2_partitions = __builtin_ctz(collected.num_partitiions);
     size_t slots_per_partition = directory.size() >> log2_partitions;
 
     std::vector<PartitionParams> params_per_partition(collected.num_partitiions);

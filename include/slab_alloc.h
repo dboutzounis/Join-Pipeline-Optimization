@@ -20,9 +20,19 @@
 static constexpr uint32_t SMALL_CHUNK = 1u << 14;
 static constexpr uint32_t LARGE_CHUNK = 1u << 20;
 
-uint32_t fast_crc32_u32(uint32_t seed, uint32_t key);
+inline uint32_t fast_crc32_u32(uint32_t seed, uint32_t key) {
+#ifdef USE_X86_CRC
+    return _mm_crc32_u32(seed, key);
+#elif defined(USE_ARM_CRC)
+    return __crc32w(seed, key);
+#endif
+}
 
-uint64_t hash32(uint32_t key, uint32_t seed);
+inline uint64_t hash32(uint32_t key, uint32_t seed) {
+    uint64_t k = 0x8648DBDB;
+    uint32_t crc = fast_crc32_u32(seed, key);
+    return crc * ((k << 32) + 1);
+}
 
 struct BuildTuple {
     uint64_t hash;
@@ -30,18 +40,22 @@ struct BuildTuple {
     size_t row_id;
 };
 
-struct Chunk {
+struct alignas(64) Chunk {
     Chunk* next;
     uint32_t used;
     uint32_t capacity;
-    alignas(64) uint8_t data[];
+    uint8_t data[];
 };
 
-Chunk* allocate_chunk(uint32_t bytes);
 BuildTuple* chunk_begin(Chunk* c);
 BuildTuple* chunk_end(Chunk* c);
 
 struct GlobalAllocator {
+    uint8_t* base;
+    uint64_t size;
+    uint64_t offset;
+
+    GlobalAllocator(uint8_t* b, uint64_t s);
     Chunk* allocateLarge(uint32_t bytes);
 };
 
@@ -60,6 +74,8 @@ struct ThreadAllocator {
     std::vector<BumpAlloc> level3;
     std::vector<uint64_t> counts;
     uint32_t log2_partitions;
+    std::vector<uint32_t> slot_counts;
+    uint64_t shift;
 
     ThreadAllocator(GlobalAllocator& g, uint32_t numPartitions);
 
@@ -69,22 +85,30 @@ struct ThreadAllocator {
 struct CollectedTuples {
     std::vector<std::unique_ptr<ThreadAllocator>> threads;
     uint32_t num_partitiions;
+    uint8_t* global_base = nullptr;
 };
-
-void free_bump_alloc(BumpAlloc& alloc);
 
 template <typename Column>
 CollectedTuples collect_build_tuples(const Column& build_column, size_t num_rows, uint32_t num_threads, uint32_t num_partitions) {
-    GlobalAllocator global;
+    uint64_t tuples_per_thread = (num_rows + num_threads - 1) / num_threads;
+    uint64_t l3_bytes = tuples_per_thread * sizeof(BuildTuple) * 2;
+    uint64_t l2_bytes = num_partitions * (sizeof(Chunk) + SMALL_CHUNK);
+    uint64_t per_thread_bytes = l3_bytes + l2_bytes + LARGE_CHUNK;
+    uint8_t* global_base = static_cast<uint8_t*>(std::malloc(per_thread_bytes * num_threads));
+
     CollectedTuples result;
     result.num_partitiions = num_partitions;
     result.threads.resize(num_threads);
+    result.global_base = global_base;
 
     std::vector<std::thread> workers;
 
     for (uint32_t tid = 0; tid < num_threads; tid++) {
         workers.emplace_back([&, tid]() {
-            auto alloc = std::make_unique<ThreadAllocator>(global, num_partitions);
+            uint8_t* thread_base = global_base + tid * per_thread_bytes;
+            GlobalAllocator thread_global(thread_base, per_thread_bytes);
+
+            auto alloc = std::make_unique<ThreadAllocator>(thread_global, num_partitions);
 
             size_t begin = (num_rows * tid) / num_threads;
             size_t end = (num_rows * (tid + 1)) / num_threads;
@@ -94,7 +118,7 @@ CollectedTuples collect_build_tuples(const Column& build_column, size_t num_rows
                 if (v.is_null()) continue;
 
                 int32_t key = v.get_int32();
-                uint64_t hash = hash32(static_cast<uint32_t>(key), 0);
+                uint64_t hash = hash32(static_cast<uint32_t>(key), 0L);
 
                 alloc->consume(hash, key, i);
             }

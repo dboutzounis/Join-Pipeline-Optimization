@@ -17,7 +17,7 @@ class Unchained {
     static constexpr uint32_t TAG_SHIFT = 32 - 11;
 
     std::vector<uint64_t> directory;
-    std::vector<Bucket> buffer;
+    Bucket* buffer = nullptr;
     uint64_t shift;
     uint16_t tags[2048];
     std::vector<std::vector<size_t>> count;
@@ -30,13 +30,19 @@ class Unchained {
    public:
     Unchained(uint64_t shift = 48);
 
+    ~Unchained();
+
     inline std::vector<uint64_t>& get_directory() { return directory; }
 
-    inline std::vector<Bucket>& get_buffer() { return buffer; }
+    inline Bucket* get_buffer() { return buffer; }
 
     inline uint16_t* get_tags() { return tags; }
 
     inline uint64_t get_shift() const { return shift; }
+
+    inline size_t get_total_count() const { return total_count; }
+
+    inline bool is_empty() const { return total_count > 0; }
 
     void key_count(int32_t key);
 
