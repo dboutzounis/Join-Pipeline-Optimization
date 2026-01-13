@@ -1514,7 +1514,7 @@ TEST_CASE("Unchained post_process_build copies tuples correctly (single partitio
     constexpr uint32_t PARTS = 4;
     constexpr uint32_t P = 2;
     constexpr uint32_t THREADS = 2;
-    std::vector<uint8_t> mem(1024 * 1024);
+    std::vector<uint8_t> mem(2048 * 2048);
     GlobalAllocator global(mem.data(), mem.size());
     CollectedTuples collected;
 
