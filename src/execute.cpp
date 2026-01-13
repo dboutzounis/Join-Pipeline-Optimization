@@ -43,7 +43,7 @@ struct JoinAlgorithm {
         if (num_threads == 0) num_threads = 1;
 
         uint32_t num_partitions = 1;
-        uint32_t target = std::min<uint32_t>(1024u, std::max<uint32_t>(1u, num_threads * 4u));
+        uint32_t target = num_threads * 4;
         while (num_partitions < target) num_partitions <<= 1;
 
         auto collected = collect_build_tuples(build_table[build_col], build_rows, num_threads, num_partitions);
@@ -56,17 +56,22 @@ struct JoinAlgorithm {
 
         std::vector<std::thread> workers;
         workers.reserve(num_threads);
+        std::atomic<uint32_t> partition_idx{0};
+
         for (uint32_t tid = 0; tid < num_threads; tid++) {
             workers.emplace_back([&, tid]() {
-                for (uint32_t p = tid; p < num_partitions; p += num_threads) hash_table.post_process_build(collected, params_per_partition[p], p);
+                while (true) {
+                    uint32_t p = partition_idx.fetch_add(1);
+                    if (p >= num_partitions) break;
+
+                    hash_table.post_process_build(collected, params_per_partition[p], p);
+                }
             });
         }
 
         for (auto& t : workers) t.join();
 
-        for (auto& t : collected.threads) {
-            if (t) free_bump_alloc(t->level2);
-        }
+        std::free(collected.global_base);
 
         for (size_t probe_idx = 0; probe_idx < probe_table[0].size(); probe_idx++) {
             auto smart_key = extract_key<T>(probe_table[probe_col].get_at(probe_idx));
@@ -91,7 +96,7 @@ struct JoinAlgorithm {
 };
 
 template <>
-inline std::optional<int32_t> JoinAlgorithm::extract_key<int32_t>(const value_t& v) const {
+std::optional<int32_t> JoinAlgorithm::extract_key<int32_t>(const value_t& v) const {
     if (v.is_null()) return std::nullopt;
     if (v.get_type() != ValueType::INT32) return std::nullopt;
     return v.get_int32();

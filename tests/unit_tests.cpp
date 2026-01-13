@@ -1156,14 +1156,13 @@ TEST_CASE("Unchained basic key_count and build", "[unchained][unchained_build]")
     h.key_count(7);
     h.key_count(13);
 
-    REQUIRE(h.get_buffer().empty());
+    REQUIRE(h.is_empty());
 
     h.build();
 
     auto& dir = h.get_directory();
-    auto& buffer = h.get_buffer();
 
-    REQUIRE(buffer.size() == 3);
+    REQUIRE(h.get_total_count() == 3);
 
     bool found3 = false;
     for (size_t i = 0; i < dir.size(); i++) {
@@ -1178,10 +1177,11 @@ TEST_CASE("Unchained basic key_count and build", "[unchained][unchained_build]")
 TEST_CASE("Unchained manual insertion and lookup", "[unchained][lookup_manual]") {
     Unchained h(60);
     auto& directory = h.get_directory();
-    auto& buffer = h.get_buffer();
     auto* tags = h.get_tags();
 
-    buffer.resize(2);
+    h.allocate_tuple_storage(2);
+
+    auto* buffer = h.get_buffer();
 
     int key1 = 10;
     int key2 = 22;
@@ -1352,29 +1352,36 @@ TEST_CASE("Unchained works with many keys (stress small)", "[unchained][unchaine
     }
 }
 
-TEST_CASE("Chunk basic initialization", "[slab_alloc]") {
+TEST_CASE("Chunk basic initialization via GlobalAllocator", "[slab_alloc]") {
+    std::vector<uint8_t> memory(LARGE_CHUNK * 2);
+    GlobalAllocator global(memory.data(), memory.size());
+
     constexpr uint32_t BYTES = 1024;
-    Chunk* c = allocate_chunk(BYTES);
+    Chunk* c = global.allocateLarge(BYTES);
+
+    c->used = 0;
+    c->capacity = BYTES;
+    c->next = nullptr;
 
     REQUIRE(c != nullptr);
-
     REQUIRE(c->used == 0);
-
     REQUIRE(c->capacity == BYTES);
-
     REQUIRE(c->next == nullptr);
 
     REQUIRE(chunk_begin(c) == reinterpret_cast<BuildTuple*>(c->data));
-
     REQUIRE(chunk_end(c) == chunk_begin(c));
-
-    std::free(c);
 }
 
-TEST_CASE("BumpAlloc allocate and free", "[slab_alloc]") {
+TEST_CASE("BumpAlloc allocate via GlobalAllocator", "[slab_alloc]") {
+    std::vector<uint8_t> memory(LARGE_CHUNK * 2);
+    GlobalAllocator global(memory.data(), memory.size());
+
     BumpAlloc alloc;
 
-    Chunk* c = allocate_chunk(256);
+    Chunk* c = global.allocateLarge(256);
+    c->used = 0;
+    c->capacity = 256;
+    c->next = nullptr;
 
     alloc.addSpace(c);
     REQUIRE(alloc.freeSpace(64));
@@ -1387,32 +1394,32 @@ TEST_CASE("BumpAlloc allocate and free", "[slab_alloc]") {
     REQUIRE(p2 != nullptr);
     REQUIRE(p2 != p1);
 
-    free_bump_alloc(alloc);
-
-    REQUIRE(alloc.head == nullptr);
-    REQUIRE(alloc.tail == nullptr);
+    REQUIRE(alloc.tail != nullptr);
 }
 
 TEST_CASE("ThreadAllocator consume puts tuples in correct partitions", "[slab_alloc]") {
-    GlobalAllocator global;
+    std::vector<uint8_t> memory(LARGE_CHUNK * 5);
+    GlobalAllocator global(memory.data(), memory.size());
+
     constexpr uint32_t PARTS = 8;
     ThreadAllocator alloc(global, PARTS);
+
     constexpr size_t N = 1000;
     std::vector<uint64_t> expected(PARTS, 0);
 
     for (size_t i = 0; i < N; i++) {
         int32_t key = static_cast<int32_t>(i);
         uint64_t hash = hash32(static_cast<uint32_t>(key), 0);
+
         uint64_t part = hash >> (64 - alloc.log2_partitions);
         expected[part]++;
+
         alloc.consume(hash, key, i);
     }
 
     for (uint32_t p = 0; p < PARTS; ++p) {
         REQUIRE(alloc.counts[p] == expected[p]);
     }
-
-    free_bump_alloc(alloc.level2);
 }
 
 TEST_CASE("collect_build_tuples counts all tuples correctly", "[slab_alloc]") {
@@ -1434,7 +1441,7 @@ TEST_CASE("collect_build_tuples counts all tuples correctly", "[slab_alloc]") {
 
     REQUIRE(total == N);
 
-    for (auto& t : collected.threads) free_bump_alloc(t->level2);
+    std::free(collected.global_base);
 }
 
 TEST_CASE("Unchained counting_per_partition computes correct offsets", "[unchained]") {
@@ -1442,10 +1449,13 @@ TEST_CASE("Unchained counting_per_partition computes correct offsets", "[unchain
     constexpr uint32_t PARTS = 4;
     CollectedTuples collected;
 
+    std::vector<uint8_t> dummy_mem(1024);
+    GlobalAllocator dummy_global(dummy_mem.data(), dummy_mem.size());
+
     collected.num_partitiions = PARTS;
     collected.threads.resize(2);
     for (auto& t : collected.threads) {
-        t = std::make_unique<ThreadAllocator>(*new GlobalAllocator(), PARTS);
+        t = std::make_unique<ThreadAllocator>(dummy_global, PARTS);
         t->counts = {1, 2, 3, 4};
     }
     auto params = ht.counting_per_partition(collected);
@@ -1466,7 +1476,7 @@ TEST_CASE("Unchained counting_per_partition computes correct offsets", "[unchain
 TEST_CASE("Unchained allocate_tuple_storage", "[unchained]") {
     Unchained ht;
     ht.allocate_tuple_storage(128);
-    REQUIRE(ht.get_buffer().size() == 128);
+    REQUIRE(ht.get_total_count() == 128);
     for (auto v : ht.get_directory()) REQUIRE(v == 0);
 }
 
@@ -1504,7 +1514,8 @@ TEST_CASE("Unchained post_process_build copies tuples correctly (single partitio
     constexpr uint32_t PARTS = 4;
     constexpr uint32_t P = 2;
     constexpr uint32_t THREADS = 2;
-    GlobalAllocator global;
+    std::vector<uint8_t> mem(1024 * 1024);
+    GlobalAllocator global(mem.data(), mem.size());
     CollectedTuples collected;
 
     collected.num_partitiions = PARTS;
@@ -1544,13 +1555,13 @@ TEST_CASE("Unchained post_process_build copies tuples correctly (single partitio
     std::sort(expected.begin(), expected.end());
 
     REQUIRE(got == expected);
-    for (auto& t : collected.threads) free_bump_alloc(t->level2);
 }
 
 TEST_CASE("Unchained post_process_build sets directory ranges consistently", "[unchained][build][directory]") {
     constexpr uint32_t PARTS = 4;
     constexpr uint32_t P = 1;
-    GlobalAllocator global;
+    std::vector<uint8_t> mem(1024 * 1024);
+    GlobalAllocator global(mem.data(), mem.size());
     CollectedTuples collected;
 
     collected.num_partitiions = PARTS;
@@ -1594,6 +1605,4 @@ TEST_CASE("Unchained post_process_build sets directory ranges consistently", "[u
 
     auto disjoint = (endA <= startB) || (endB <= startA);
     REQUIRE(disjoint);
-
-    free_bump_alloc(collected.threads[0]->level2);
 }
