@@ -3,20 +3,32 @@
 ValueColumn::ValueColumn() : total_size(0) {}
 
 ValueColumn::ValueColumn(size_t expected_rows) : total_size(0) {
-    size_t pages_needed = (expected_rows + PAGE_T_SIZE - 1) / PAGE_T_SIZE;
-    pages.assign(pages_needed, Page_t());
+    size_t pages_needed =
+        (expected_rows + PAGE_T_SIZE - 1) / PAGE_T_SIZE;
+
+    pages.reserve(pages_needed);
+}
+
+ValueColumn::~ValueColumn() {
+    for (auto* p : pages) {
+        delete p;
+    }
 }
 
 void ValueColumn::push_back(const value_t& v) {
     size_t pageIndex = total_size >> PAGE_SHIFT;
-    size_t offset = total_size & PAGE_MASK;
+    size_t offset    = total_size & PAGE_MASK;
 
-    if (offset == 0 && pages.size() <= pageIndex) {
-        pages.push_back(Page_t());
+    if (pages.size() <= pageIndex) {
+        pages.push_back(new Page_t());
     }
-
-    pages[pageIndex].values[offset] = v;
+    pages[pageIndex]->values[offset] = v;
     total_size++;
+}
+
+void ValueColumn::push_page(Page_t* page , uint16_t num_rows){
+    pages.push_back(page);
+    total_size += num_rows;
 }
 
 value_t ValueColumn::get_at(size_t index) const {
@@ -27,7 +39,7 @@ value_t ValueColumn::get_at(size_t index) const {
         value_t v;
         return v.null_value();
     }
-    return pages[pageIndex].values[offset];
+    return pages[pageIndex]->values[offset];
 }
 
 void  ValueColumn::write_at(const value_t& v , size_t index){
@@ -38,12 +50,38 @@ void  ValueColumn::write_at(const value_t& v , size_t index){
         pages.resize(pageIndex + 1);
     }
 
-    pages[pageIndex].values[offset] = v;
+    pages[pageIndex]->values[offset] = v;
     total_size++;
 
-    pages[pageIndex].values[offset] = v;
+    pages[pageIndex]->values[offset] = v;
     total_size++;
 }
+
+std::vector<Page_t*> ValueColumn::steal_full_pages() {
+    std::vector<Page_t*> stolen;
+
+    // nothing to steal
+    if (pages.size() <= 1)
+        return stolen;
+
+    const size_t full_pages = pages.size() - 1;
+
+    stolen.reserve(full_pages);
+
+    // move ownership of full pages
+    for (size_t i = 0; i < full_pages; ++i) {
+        stolen.push_back(pages[i]);
+    }
+
+    // remove them from this column
+    pages.erase(pages.begin(), pages.begin() + full_pages);
+
+    // adjust logical size
+    total_size -= full_pages * PAGE_T_SIZE;
+
+    return stolen;
+}
+
 
 size_t ValueColumn::size() const {
     return total_size;
@@ -112,6 +150,17 @@ void Column_t::push_page(int32_t* page , uint16_t num_rows){
     assert(storage == ColumnStorage::PageOwned);
     static_cast<PageColumn*>(impl.get())->push_page(page , num_rows);    
 }
+void Column_t::push_page(Page_t* page , uint16_t num_rows){
+    assert(storage == ColumnStorage::ValueOwned);
+    static_cast<ValueColumn*>(impl.get())->push_page(page , num_rows);    
+}
+
+ std::vector<Page_t*> Column_t::steal_full_pages(){
+    assert(storage == ColumnStorage::ValueOwned);
+    return static_cast<ValueColumn*>(impl.get())->steal_full_pages();   
+ }
+
+
 
 value_t Column_t::get_at(size_t i) const {
     return impl->get_at(i);

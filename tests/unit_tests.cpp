@@ -1098,24 +1098,45 @@ TEST_CASE("Column_t stress tests", "[column_t]") {
         REQUIRE(col.size() == N);
         REQUIRE(col.page_num() == 52);
 
-        // check a few random points
         REQUIRE(col.get_at(0).get_int32() == 0);
         REQUIRE(col.get_at(PAGE_T_SIZE * 10 + 33).get_int32() == PAGE_T_SIZE * 10 + 33);
         REQUIRE(col.get_at(N - 1).get_int32() == N - 1);
     }
 }
 
-TEST_CASE("ValueColumn write_at allocates pages regardless of offset", "[column_t][write_at]") {
-    ValueColumn col;   // start with NO pages
+TEST_CASE("ValueColumn push_page stores externally provided pages with value_t correctly",
+          "[value_column][push_page][column_t]") {
+    ValueColumn col;
     value_t v;
 
-    size_t index = PAGE_T_SIZE * 2 + 7;
-
     REQUIRE(col.page_num() == 0);
+    REQUIRE(col.size() == 0);
 
-    col.write_at(v.from_int32(123), index);
-    REQUIRE(col.page_num() == 3);
-    REQUIRE(col.get_at(index).get_int32() == 123);
+    auto* page1 = new Page_t();
+    auto* page2 = new Page_t();
+
+    for (size_t i = 0; i < 1024; ++i) {
+        page1->values[i] = v.from_int32(static_cast<int32_t>(i));
+        page2->values[i] = v.from_int32(static_cast<int32_t>(i + 1'000));
+    }
+
+    col.push_page(page1, 1024);
+    REQUIRE(col.page_num() == 1);
+    REQUIRE(col.size() == 1024);
+
+    col.push_page(page2, 1024);
+    REQUIRE(col.page_num() == 2);
+    REQUIRE(col.size() == 2 * 1024);
+
+    for (size_t i = 0; i < 1024; ++i) {
+        auto val = col.get_at(i);
+        REQUIRE(val.get_type() == ValueType::INT32);
+        REQUIRE(val.get_int32() == static_cast<int32_t>(i));
+    }
+    for (size_t i = 0; i < 1024; ++i) {
+        auto val = col.get_at(1024 + i);
+        REQUIRE(val.get_int32() == static_cast<int32_t>(i + 1'000));
+    }
 }
 
 

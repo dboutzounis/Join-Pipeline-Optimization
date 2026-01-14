@@ -92,18 +92,29 @@ struct JoinAlgorithm {
         for (auto& t : workers)
             t.join();
 
+        for (size_t col = 0; col < results.size(); ++col) {
+            for (size_t tid = 0; tid < WORKERS_NUM; ++tid) {
+                auto& local_col = local_results[tid][col];
+                auto full_pages = local_col.steal_full_pages();
+                for (auto* p : full_pages) {
+                    results[col].push_page(p, PAGE_T_SIZE);
+                }
+            }
+        }
 
-        for (size_t tid = 0; tid < WORKERS_NUM; ++tid) {
-            auto& src = local_results[tid];
+        for (size_t col = 0; col < results.size(); ++col) {
+            for (size_t tid = 0; tid < WORKERS_NUM; ++tid) {
+                auto& local_col = local_results[tid][col];
 
-            for (size_t col = 0; col < src.size(); ++col) {
-                const size_t n = src[col].size();
-                for (size_t i = 0; i < n; ++i) {
-                    results[col].push_back(src[col].get_at(i));
+                const size_t tail = local_col.size();  // ≤ PAGE_T_SIZE
+
+                for (size_t i = 0; i < tail; ++i) {
+                    results[col].push_back(local_col.get_at(i));
                 }
             }
         }
         return &results;
+     
     }
     template <class T>
     void probe_worker(

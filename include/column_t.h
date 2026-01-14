@@ -36,14 +36,17 @@ struct PageRef32 {
 struct ValueColumn final : ColumnImpl {
     ValueColumn();
     explicit ValueColumn(size_t expected_rows);
+      ~ValueColumn(); // IMPORTANT
 
     void push_back(const value_t& v);
+    void push_page(Page_t* page , uint16_t num_rows);
+    std::vector<Page_t*> steal_full_pages();
     void write_at(const value_t& v , size_t index);
     value_t get_at(size_t index) const override;
     size_t size() const override;
     size_t page_num() const override;
 
-    std::vector<Page_t> pages;
+    std::vector<Page_t*> pages;
     size_t total_size;
 };
 
@@ -66,7 +69,9 @@ struct Column_t {
     void push_back(const value_t& v);
     void write_at(const value_t& v , size_t index);
     void push_page(int32_t* page , uint16_t num_rows);
+    void push_page(Page_t* page , uint16_t num_rows);
     value_t get_at(size_t i) const;
+    std::vector<Page_t*> steal_full_pages();
     size_t size() const;
     size_t page_num() const;
     
