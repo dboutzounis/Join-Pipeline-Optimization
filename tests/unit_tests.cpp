@@ -1152,10 +1152,10 @@ TEST_CASE("Column_t PageOwned stores and retrieves int32 pages",
         page2[i] = static_cast<int32_t>(i + 10'000);
     }
 
-    Column_t col(ColumnStorage::PageOwned , 2*INT32_ROWS_PER_PAGE);
+    Column_t col(ColumnStorage::PageOwned, 2 * INT32_ROWS_PER_PAGE);
 
-    col.push_page(page1 , INT32_ROWS_PER_PAGE);
-    col.push_page(page2 , INT32_ROWS_PER_PAGE);
+    col.push_page(page1, INT32_ROWS_PER_PAGE);
+    col.push_page(page2, INT32_ROWS_PER_PAGE);
 
     REQUIRE(col.page_num() == 2);
     REQUIRE(col.size() == 2 * INT32_ROWS_PER_PAGE);
@@ -1174,7 +1174,6 @@ TEST_CASE("Column_t PageOwned stores and retrieves int32 pages",
     delete[] page2;
 }
 
-
 TEST_CASE("Unchained basic key_count and build", "[unchained][unchained_build]") {
     Unchained h(60);
 
@@ -1182,14 +1181,13 @@ TEST_CASE("Unchained basic key_count and build", "[unchained][unchained_build]")
     h.key_count(7);
     h.key_count(13);
 
-    REQUIRE(h.get_buffer().empty());
+    REQUIRE(h.is_empty());
 
     h.build();
 
     auto& dir = h.get_directory();
-    auto& buffer = h.get_buffer();
 
-    REQUIRE(buffer.size() == 3);
+    REQUIRE(h.get_total_count() == 3);
 
     bool found3 = false;
     for (size_t i = 0; i < dir.size(); i++) {
@@ -1204,10 +1202,11 @@ TEST_CASE("Unchained basic key_count and build", "[unchained][unchained_build]")
 TEST_CASE("Unchained manual insertion and lookup", "[unchained][lookup_manual]") {
     Unchained h(60);
     auto& directory = h.get_directory();
-    auto& buffer = h.get_buffer();
     auto* tags = h.get_tags();
 
-    buffer.resize(2);
+    h.allocate_tuple_storage(2);
+
+    auto* buffer = h.get_buffer();
 
     int key1 = 10;
     int key2 = 22;
@@ -1376,4 +1375,259 @@ TEST_CASE("Unchained works with many keys (stress small)", "[unchained][unchaine
         REQUIRE(r.size() == 1);
         REQUIRE(r[0] == i * 10);
     }
+}
+
+TEST_CASE("Chunk basic initialization via GlobalAllocator", "[slab_alloc]") {
+    std::vector<uint8_t> memory(LARGE_CHUNK * 2);
+    GlobalAllocator global(memory.data(), memory.size());
+
+    constexpr uint32_t BYTES = 1024;
+    Chunk* c = global.allocateLarge(BYTES);
+
+    c->used = 0;
+    c->capacity = BYTES;
+    c->next = nullptr;
+
+    REQUIRE(c != nullptr);
+    REQUIRE(c->used == 0);
+    REQUIRE(c->capacity == BYTES);
+    REQUIRE(c->next == nullptr);
+
+    REQUIRE(chunk_begin(c) == reinterpret_cast<BuildTuple*>(c->data));
+    REQUIRE(chunk_end(c) == chunk_begin(c));
+}
+
+TEST_CASE("BumpAlloc allocate via GlobalAllocator", "[slab_alloc]") {
+    std::vector<uint8_t> memory(LARGE_CHUNK * 2);
+    GlobalAllocator global(memory.data(), memory.size());
+
+    BumpAlloc alloc;
+
+    Chunk* c = global.allocateLarge(256);
+    c->used = 0;
+    c->capacity = 256;
+    c->next = nullptr;
+
+    alloc.addSpace(c);
+    REQUIRE(alloc.freeSpace(64));
+
+    void* p1 = alloc.allocate(64);
+    REQUIRE(p1 != nullptr);
+    REQUIRE(alloc.freeSpace(64));
+
+    void* p2 = alloc.allocate(64);
+    REQUIRE(p2 != nullptr);
+    REQUIRE(p2 != p1);
+
+    REQUIRE(alloc.tail != nullptr);
+}
+
+TEST_CASE("ThreadAllocator consume puts tuples in correct partitions", "[slab_alloc]") {
+    std::vector<uint8_t> memory(LARGE_CHUNK * 5);
+    GlobalAllocator global(memory.data(), memory.size());
+
+    constexpr uint32_t PARTS = 8;
+    ThreadAllocator alloc(global, PARTS);
+
+    constexpr size_t N = 1000;
+    std::vector<uint64_t> expected(PARTS, 0);
+
+    for (size_t i = 0; i < N; i++) {
+        int32_t key = static_cast<int32_t>(i);
+        uint64_t hash = hash32(static_cast<uint32_t>(key), 0);
+
+        uint64_t part = hash >> (64 - alloc.log2_partitions);
+        expected[part]++;
+
+        alloc.consume(hash, key, i);
+    }
+
+    for (uint32_t p = 0; p < PARTS; ++p) {
+        REQUIRE(alloc.counts[p] == expected[p]);
+    }
+}
+
+TEST_CASE("collect_build_tuples counts all tuples correctly", "[slab_alloc]") {
+    constexpr size_t N = 10000;
+    constexpr uint32_t THREADS = 4;
+    constexpr uint32_t PARTS = 8;
+    Column_t data;
+    value_t v;
+
+    for (size_t i = 0; i < N; i++) data.push_back(v.from_int32(static_cast<int32_t>(i)));
+
+    auto collected = collect_build_tuples(data, N, THREADS, PARTS);
+
+    uint64_t total = 0;
+
+    for (auto& t : collected.threads) {
+        for (uint64_t c : t->counts) total += c;
+    }
+
+    REQUIRE(total == N);
+
+    std::free(collected.global_base);
+}
+
+TEST_CASE("Unchained counting_per_partition computes correct offsets", "[unchained]") {
+    Unchained ht;
+    constexpr uint32_t PARTS = 4;
+    CollectedTuples collected;
+
+    std::vector<uint8_t> dummy_mem(1024);
+    GlobalAllocator dummy_global(dummy_mem.data(), dummy_mem.size());
+
+    collected.num_partitiions = PARTS;
+    collected.threads.resize(2);
+    for (auto& t : collected.threads) {
+        t = std::make_unique<ThreadAllocator>(dummy_global, PARTS);
+        t->counts = {1, 2, 3, 4};
+    }
+    auto params = ht.counting_per_partition(collected);
+
+    REQUIRE(params.size() == PARTS);
+
+    REQUIRE(params[0].buffer_offset == 0);
+    REQUIRE(params[1].buffer_offset == 2);
+    REQUIRE(params[2].buffer_offset == 6);
+    REQUIRE(params[3].buffer_offset == 12);
+
+    REQUIRE(params[0].tuple_count == 2);
+    REQUIRE(params[1].tuple_count == 4);
+    REQUIRE(params[2].tuple_count == 6);
+    REQUIRE(params[3].tuple_count == 8);
+}
+
+TEST_CASE("Unchained allocate_tuple_storage", "[unchained]") {
+    Unchained ht;
+    ht.allocate_tuple_storage(128);
+    REQUIRE(ht.get_total_count() == 128);
+    for (auto v : ht.get_directory()) REQUIRE(v == 0);
+}
+
+static uint64_t find_key_for_partition_and_slot(uint32_t desired_partition, uint32_t num_partitions, const Unchained& ht, uint32_t& out_slot) {
+    const uint32_t log2p = static_cast<uint32_t>(std::log2(num_partitions));
+
+    for (uint32_t key = 1; key < 1000000; ++key) {
+        uint64_t h = hash32(key, 0);
+        uint32_t part = h >> (64 - log2p);
+        if (part != desired_partition) continue;
+        uint32_t slot = h >> ht.get_shift();
+        out_slot = slot;
+        return key;
+    }
+
+    return 0;
+}
+
+static uint64_t find_key_for_partition_and_different_slot(uint32_t desired_partition, uint32_t num_partitions, const Unchained& ht, uint32_t forbidden_slot) {
+    const uint32_t log2p = static_cast<uint32_t>(std::log2(num_partitions));
+
+    for (uint32_t key = 1; key < 1000000; ++key) {
+        uint64_t h = hash32(key, 0);
+        uint32_t part = h >> (64 - log2p);
+        if (part != desired_partition) continue;
+        uint32_t slot = h >> ht.get_shift();
+        if (slot == forbidden_slot) continue;
+        return key;
+    }
+
+    return 0;
+}
+
+TEST_CASE("Unchained post_process_build copies tuples correctly (single partition, multi-thread)", "[unchained][build]") {
+    constexpr uint32_t PARTS = 4;
+    constexpr uint32_t P = 2;
+    constexpr uint32_t THREADS = 2;
+    std::vector<uint8_t> mem(2048 * 2048);
+    GlobalAllocator global(mem.data(), mem.size());
+    CollectedTuples collected;
+
+    collected.num_partitiions = PARTS;
+    collected.threads.resize(THREADS);
+
+    for (uint32_t t = 0; t < THREADS; ++t) collected.threads[t] = std::make_unique<ThreadAllocator>(global, PARTS);
+
+    Unchained ht;
+    uint32_t slotA;
+    uint32_t slotB;
+
+    uint32_t keyA = find_key_for_partition_and_slot(P, PARTS, ht, slotA);
+    uint32_t keyB = keyA;
+    uint32_t keyC = find_key_for_partition_and_different_slot(P, PARTS, ht, slotA);
+
+    collected.threads[0]->consume(hash32(keyA, 0), keyA, 7);
+    collected.threads[0]->consume(hash32(keyB, 0), keyB, 8);
+    collected.threads[1]->consume(hash32(keyC, 0), keyC, 9);
+
+    auto params = ht.counting_per_partition(collected);
+
+    uint64_t total = 0;
+    for (auto& pp : params) total += pp.tuple_count;
+    REQUIRE(total == 3);
+
+    ht.allocate_tuple_storage(total);
+    ht.post_process_build(collected, params[P], P);
+
+    std::vector<std::pair<int32_t, size_t>> got;
+    for (uint64_t i = 0; i < params[P].tuple_count; ++i) {
+        const auto& b = ht.get_buffer()[params[P].buffer_offset + i];
+        got.emplace_back(b.key, b.row_id);
+    }
+
+    std::vector<std::pair<int32_t, size_t>> expected = {{static_cast<int32_t>(keyA), 7}, {static_cast<int32_t>(keyB), 8}, {static_cast<int32_t>(keyC), 9}};
+    std::sort(got.begin(), got.end());
+    std::sort(expected.begin(), expected.end());
+
+    REQUIRE(got == expected);
+}
+
+TEST_CASE("Unchained post_process_build sets directory ranges consistently", "[unchained][build][directory]") {
+    constexpr uint32_t PARTS = 4;
+    constexpr uint32_t P = 1;
+    std::vector<uint8_t> mem(1024 * 1024);
+    GlobalAllocator global(mem.data(), mem.size());
+    CollectedTuples collected;
+
+    collected.num_partitiions = PARTS;
+    collected.threads.resize(1);
+    collected.threads[0] = std::make_unique<ThreadAllocator>(global, PARTS);
+
+    Unchained ht;
+    uint32_t slotA;
+    uint32_t slotB;
+    uint32_t keyA = find_key_for_partition_and_slot(P, PARTS, ht, slotA);
+    uint32_t keyB = find_key_for_partition_and_different_slot(P, PARTS, ht, slotA);
+
+    collected.threads[0]->consume(hash32(keyA, 0), keyA, 100);
+    collected.threads[0]->consume(hash32(keyA, 0), keyA, 101);
+    collected.threads[0]->consume(hash32(keyA, 0), keyA, 102);
+    collected.threads[0]->consume(hash32(keyB, 0), keyB, 200);
+    collected.threads[0]->consume(hash32(keyB, 0), keyB, 201);
+
+    auto params = ht.counting_per_partition(collected);
+
+    uint64_t total = 0;
+    for (auto& pp : params) total += pp.tuple_count;
+    REQUIRE(total == 5);
+
+    ht.allocate_tuple_storage(total);
+    ht.post_process_build(collected, params[P], P);
+    uint64_t slotIdxA = hash32(keyA, 0) >> ht.get_shift();
+    uint64_t slotIdxB = hash32(keyB, 0) >> ht.get_shift();
+    REQUIRE(slotIdxA != slotIdxB);
+
+    uint64_t endA = ht.get_directory()[slotIdxA] >> 16;
+    uint64_t endB = ht.get_directory()[slotIdxB] >> 16;
+    uint64_t startA = endA - 3;
+    uint64_t startB = endB - 2;
+    uint64_t base = params[P].buffer_offset;
+    uint64_t limit = base + params[P].tuple_count;
+    REQUIRE(startA >= base);
+    REQUIRE(endA <= limit);
+    REQUIRE(startB >= base);
+    REQUIRE(endB <= limit);
+
+    auto disjoint = (endA <= startB) || (endB <= startA);
+    REQUIRE(disjoint);
 }

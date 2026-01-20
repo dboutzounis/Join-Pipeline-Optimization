@@ -73,6 +73,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc|powerpc|ppc64|ppc64le")
 endif()
 FetchContent_MakeAvailable(duckdb)
 
+find_package(Threads REQUIRED)
+
 # Include all sources from /src directory. CONFIGURE_DEPENDS can be unreliable.
 # Try re-running cmake in case changes are not recognized.
 file(GLOB SIGMODPC_SRC
@@ -104,17 +106,17 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     add_executable(build_cache ${SIGMODPC_SRC} tests/read_sql.cpp)
     add_executable(fast ${SIGMODPC_SRC} tests/read_sql.cpp)
 
-    target_link_libraries(build_cache PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
+    target_link_libraries(build_cache PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb Threads::Threads)
     target_compile_definitions(build_cache PRIVATE TEAMOPT_USE_DUCKDB TEAMOPT_BUILD_CACHE)
-    target_link_libraries(fast PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser)
+    target_link_libraries(fast PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser Threads::Threads)
     target_include_directories(build_cache PRIVATE include)
     target_include_directories(fast PRIVATE include)
 endif()
 
-target_link_libraries(run PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb)
+target_link_libraries(run PRIVATE re2 fmt range-v3 nlohmann_json::nlohmann_json sqlparser duckdb Threads::Threads)
 target_compile_definitions(run PRIVATE TEAMOPT_USE_DUCKDB)
-target_link_libraries(build_database PRIVATE fmt duckdb)
-target_link_libraries(unit_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain)
+target_link_libraries(build_database PRIVATE fmt duckdb Threads::Threads)
+target_link_libraries(unit_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain Threads::Threads)
 
 target_include_directories(run PRIVATE include)
 target_include_directories(build_database PRIVATE include)
