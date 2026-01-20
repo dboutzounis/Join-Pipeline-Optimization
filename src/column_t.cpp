@@ -59,24 +59,17 @@ void  ValueColumn::write_at(const value_t& v , size_t index){
 
 std::vector<Page_t*> ValueColumn::steal_full_pages() {
     std::vector<Page_t*> stolen;
-
-    // nothing to steal
+    
     if (pages.size() <= 1)
         return stolen;
 
     const size_t full_pages = pages.size() - 1;
 
     stolen.reserve(full_pages);
-
-    // move ownership of full pages
     for (size_t i = 0; i < full_pages; ++i) {
         stolen.push_back(pages[i]);
     }
-
-    // remove them from this column
     pages.erase(pages.begin(), pages.begin() + full_pages);
-
-    // adjust logical size
     total_size -= full_pages * PAGE_T_SIZE;
 
     return stolen;
