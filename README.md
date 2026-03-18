@@ -1,16 +1,16 @@
 # Join Pipeline Optimization
 
-## Third Assignment: Indexing Optimization and Parallel Joins
+## Indexing Optimization and Parallel Joins
 
 ### Authors
 
-- Boutzounis Dimitrios - Nikolaos 1115202200112 sdi2200112@di.uoa.gr
-- Stephanou Iasonas 1115202200246 sdi2200246@di.uoa.gr
-- Stavrou Spyridon 1115202200172 sdi2200172@di.uoa.gr
+- Boutzounis Dimitrios - Nikolaos sdi2200112@di.uoa.gr
+- Stephanou Iasonas sdi2200246@di.uoa.gr
+- Stavrou Spyridon sdi2200172@di.uoa.gr
 
 ### Overview
 
-### Index Optimization (Stephanou Iasonas)
+### Index Optimization
 
 This implementation introduces an internal optimization for column storage while **preserving the exact same `Column_t` public API**.  
 The goal is to improve indexing and access efficiency without affecting execution logic or column consumers.
@@ -81,7 +81,7 @@ The test demonstrates that:
 - No data copying occurs
 - Page-based access is transparent to the caller
 
-### Parallel Building (Boutzounis Dimitrios - Nikolaos, Stavrou Spyridon)
+### Parallel Building
 
 This part of the project focuses on the parallel construction phase. The goal of this phase is to efficiently build the underlying structure from a large set of input elements by exploiting thread-level parallelism, reducing total construction time compared to a purely sequential approach.
 
@@ -144,7 +144,7 @@ The test cases include a comprehensive suite of unit tests in order to ensure th
   - Tuples are correctly copied from thread-local buffers to the final contiguous storage.
   - Directory entries are updated to point to the correct, disjoint ranges of tuples (handling hash collisions correctly).
 
-### Parallel Probing (Stephanou Iasonas)
+### Parallel Probing
 
 This component implements the **probe phase of a parallel hash join** using a **work-stealing execution model**.  
 The goal is to maximize parallelism and load balance while avoiding synchronization overhead during result production.
